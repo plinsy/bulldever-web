@@ -9,6 +9,7 @@ import { useFrame } from "@react-three/fiber";
 import { Html } from "@react-three/drei";
 import * as CONFIG from "./config";
 import type { AccidentEvent } from "./accidentTypes";
+import type { TrafficSignalMap } from "./trafficLightTypes";
 
 export type { AccidentEvent };
 
@@ -46,6 +47,8 @@ interface CarSystemProps {
     onMetrics?: (metrics: TrafficMetrics) => void;
     /** Called once per detected collision with the accident details */
     onAccident?: (event: AccidentEvent) => void;
+    /** Shared signal map written by TrafficLightSystem; read here to stop cars at red lights. */
+    signalMapRef?: React.MutableRefObject<TrafficSignalMap>;
 }
 
 /** Generate a Madagascar-style license plate: "AB 1234" or "TAM 5678" */
@@ -126,7 +129,7 @@ async function postSnapshot(metrics: TrafficMetrics, hour: number): Promise<void
     }
 }
 
-export default function CarSystem({ roads, hour, onMetrics, onAccident }: CarSystemProps) {
+export default function CarSystem({ roads, hour, onMetrics, onAccident, signalMapRef }: CarSystemProps) {
     const chassisRef = useRef<THREE.InstancedMesh>(null!);
     const cabinRef = useRef<THREE.InstancedMesh>(null!);
     const headLightsRef = useRef<THREE.InstancedMesh>(null!);
@@ -349,6 +352,55 @@ export default function CarSystem({ roads, hour, onMetrics, onAccident }: CarSys
             } else if (minDistanceInFront < slowGap) {
                 currentSpeed *= 0.3;
             }
+
+            // ── Traffic light check ──────────────────────────────────────
+            if (currentSpeed > 0 && signalMapRef?.current) {
+                const curveT = Math.max(0, Math.min(1, car.progress));
+                const fwd = curve.getTangentAt(curveT);
+                if (car.direction === -1) fwd.negate();
+
+                const approachDist = CONFIG.TRAFFIC_LIGHT_APPROACH * METER;
+                const stopDist = CONFIG.TRAFFIC_LIGHT_STOP * METER;
+                const innerDist = CONFIG.TRAFFIC_LIGHT_INNER * METER;
+                const queueDist = CONFIG.TRAFFIC_LIGHT_QUEUE_ZONE * METER;
+
+                for (const signal of signalMapRef.current.values()) {
+                    const dx = signal.position.x - car.currentPos.x;
+                    const dz = signal.position.z - car.currentPos.z;
+                    const distSq = dx * dx + dz * dz;
+                    if (distSq > approachDist * approachDist) continue;
+
+                    const dist = Math.sqrt(distSq);
+                    if (dist < innerDist) continue; // already inside, don't stop
+
+                    // Only react if the intersection is ahead of the car
+                    const towardDot = (dx / dist) * fwd.x + (dz / dist) * fwd.z;
+                    if (towardDot < 0.3) continue;
+
+                    const inA = signal.phaseARoads.has(car.roadIdx);
+                    const inB = signal.phaseBRoads.has(car.roadIdx);
+                    if (!inA && !inB) continue;
+
+                    // Phase 0 = A green, phase 2 = B green
+                    const isRed = inA ? signal.currentPhase !== 0 : signal.currentPhase !== 2;
+                    if (!isRed) continue;
+
+                    // Brake proportionally and hard-stop at the stop line
+                    if (dist <= stopDist) {
+                        currentSpeed = 0;
+                    } else {
+                        const brakeFactor = (dist - stopDist) / (approachDist - stopDist);
+                        currentSpeed = Math.min(currentSpeed, car.baseSpeed * brakeFactor * 0.6);
+                    }
+
+                    // Count this car as queued for adaptive timing
+                    if (dist < queueDist) {
+                        if (inA) signal.phaseAQueueCount++;
+                        else signal.phaseBQueueCount++;
+                    }
+                }
+            }
+            // ── End traffic light check ───────────────────────────────────
 
             const curveLen = curve.getLength();
             if (curveLen > 0.1) {

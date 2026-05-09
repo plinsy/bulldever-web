@@ -19,7 +19,9 @@ import {
 import * as THREE from "three";
 import RoadNetwork from "./RoadNetwork";
 import CarSystem, { TrafficMetrics } from "../simulation/CarSystem";
+import TrafficLightSystem from "./TrafficLightSystem";
 import type { AccidentEvent } from "../simulation/accidentTypes";
+import type { TrafficSignalMap } from "../simulation/trafficLightTypes";
 import AccidentMarkers from "./AccidentMarkers";
 import * as CONFIG from "../simulation/config";
 import {
@@ -166,6 +168,9 @@ function WorldContent({ hour, onRoadInfo, onLoadingChange, onMetrics, onAccident
   // Combined loading state for HUD spinner
   const loading = roadsLoading && bldgLoading;
 
+  /** Shared mutable signal state – written by TrafficLightSystem, read by CarSystem. */
+  const signalMapRef = useRef<TrafficSignalMap>(new Map());
+
   useEffect(() => {
     onLoadingChange?.(loading);
   }, [loading, onLoadingChange]);
@@ -287,9 +292,20 @@ function WorldContent({ hour, onRoadInfo, onLoadingChange, onMetrics, onAccident
           />
         ))}
 
-      {/* Vehicles — only once roads are ready */}
+      {/* Traffic lights + vehicles — only once roads are ready.
+          TrafficLightSystem must render before CarSystem so its useFrame
+          runs first and advances phase timers before CarSystem reads them. */}
       {!roadsLoading && roads.length > 0 && (
-        <CarSystem roads={roads} hour={hour} onMetrics={onMetrics} onAccident={onAccident} />
+        <>
+          <TrafficLightSystem roads={roads} signalMapRef={signalMapRef} />
+          <CarSystem
+            roads={roads}
+            hour={hour}
+            onMetrics={onMetrics}
+            onAccident={onAccident}
+            signalMapRef={signalMapRef}
+          />
+        </>
       )}
 
       {/* Accident visual markers */}

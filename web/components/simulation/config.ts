@@ -75,3 +75,16 @@ export const ROAD_WIDTH_METERS: Record<string, number> = {
     unclassified: 4.5,
 };
 
+// 12. Traffic Lights (in Meters)
+export const TRAFFIC_LIGHT_APPROACH = 30.0;   // Distance at which a car starts checking the signal
+export const TRAFFIC_LIGHT_STOP = 8.0;        // Hard-stop distance from intersection centre
+export const TRAFFIC_LIGHT_INNER = 4.0;       // Radius inside which a car is considered "in" the intersection
+export const TRAFFIC_LIGHT_QUEUE_ZONE = 25.0; // Distance at which a stopped car is counted as "queued"
+
+// Signal timing (seconds)
+export const SIGNAL_BASE_GREEN = 15;
+export const SIGNAL_MIN_GREEN = 8;
+export const SIGNAL_MAX_GREEN = 40;
+export const SIGNAL_YELLOW_DUR = 2.5;
+export const SIGNAL_QUEUE_WEIGHT = 1.5; // Extra green seconds granted per queued car
+
