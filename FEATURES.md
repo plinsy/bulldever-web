@@ -17,3 +17,5 @@
     - [X] Les routes bloquees par des embouteillages
     - [X] Pour demander le meilleur chemin
     - [X] Prediction heure de sortie ideale
+
+- [ ] DésIA-iser l'app
