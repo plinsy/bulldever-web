@@ -3,10 +3,9 @@
 import { useRef, useMemo } from "react";
 import { useFrame } from "@react-three/fiber";
 import * as THREE from "three";
-import { CENTER } from "./geo";
 import { SCALE, METER } from "../simulation/config";
 import * as CONFIG from "../simulation/config";
-import type { OsmRoad } from "./geo";
+import type { LatLng, OsmRoad } from "./geo";
 import type {
     IntersectionSignal,
     TrafficSignalMap,
@@ -98,7 +97,7 @@ function assignPhases(
  *  - At least one connecting road is of a major type (primary/secondary/tertiary)
  *  - At least two distinct roads connect (deduplication step)
  */
-function deriveSignaledIntersections(roads: OsmRoad[]): IntersectionData[] {
+function deriveSignaledIntersections(roads: OsmRoad[], center: LatLng): IntersectionData[] {
     const key = (lat: number, lng: number) =>
         `${lat.toFixed(4)},${lng.toFixed(4)}`;
 
@@ -124,8 +123,8 @@ function deriveSignaledIntersections(roads: OsmRoad[]): IntersectionData[] {
         for (const { point, atStart } of endpoints) {
             const k = key(point.lat, point.lng);
             if (!map.has(k)) {
-                const x = (point.lng - CENTER.lng) * SCALE;
-                const z = -(point.lat - CENTER.lat) * SCALE;
+                const x = (point.lng - center.lng) * SCALE;
+                const z = -(point.lat - center.lat) * SCALE;
                 map.set(k, {
                     count: 0,
                     pos: new THREE.Vector3(x, 0, z),
@@ -179,6 +178,7 @@ function adaptGreenDuration(queueCount: number): number {
 
 export interface TrafficLightSystemProps {
     roads: OsmRoad[];
+    center: LatLng;
     /** Shared mutable ref – TrafficLightSystem advances phases; CarSystem updates queues. */
     signalMapRef: React.MutableRefObject<TrafficSignalMap>;
 }
@@ -197,11 +197,12 @@ export interface TrafficLightSystemProps {
  */
 export default function TrafficLightSystem({
     roads,
+    center,
     signalMapRef,
 }: TrafficLightSystemProps) {
     const intersections = useMemo(
-        () => deriveSignaledIntersections(roads),
-        [roads]
+        () => deriveSignaledIntersections(roads, center),
+        [roads, center]
     );
 
     // One-time initialisation: populate signalMapRef when intersections are ready

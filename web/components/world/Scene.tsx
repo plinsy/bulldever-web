@@ -17,6 +17,13 @@ import {
   useRef,
 } from "react";
 import * as THREE from "three";
+import { 
+  ChevronUp, 
+  ChevronDown, 
+  ChevronLeft, 
+  ChevronRight,
+  Navigation
+} from "lucide-react";
 import RoadNetwork from "./RoadNetwork";
 import CarSystem, { TrafficMetrics } from "../simulation/CarSystem";
 import TrafficLightSystem from "./TrafficLightSystem";
@@ -30,6 +37,8 @@ import {
   OsmRoad,
   OsmBuilding,
   METER,
+  LatLng,
+  INITIAL_CENTER
 } from "./geo";
 import axios from "axios";
 
@@ -67,66 +76,36 @@ function Ground() {
   );
 }
 
-// Madagascar-style building palette: terracotta, sand, ochre, whitewash
 const BUILDING_COLORS = [
-  "#c9a882",
-  "#d4a96a",
-  "#c8b89a",
-  "#b5835a",
-  "#e8d5b0",
-  "#c4a882",
-  "#d9c5a0",
-  "#b8926a",
+  "#c9a882", "#d4a96a", "#c8b89a", "#b5835a",
+  "#e8d5b0", "#c4a882", "#d9c5a0", "#b8926a",
 ];
 
 function BuildingMesh({ b, color }: { b: OsmBuilding; color: string }) {
   const geo = useMemo(() => {
     try {
       if (b.points.length < 3) return new THREE.BufferGeometry();
-
-      // Remove consecutive duplicate points which can crash the Extrude/Earcut algorithm
       let cleanPts = b.points.filter((p, i, arr) => {
         if (i === 0) return true;
         const prev = arr[i - 1];
-        return (
-          Math.abs(p.x - prev.x) > 0.001 || Math.abs(p.z - prev.z) > 0.001
-        );
+        return (Math.abs(p.x - prev.x) > 0.001 || Math.abs(p.z - prev.z) > 0.001);
       });
-      
-      // Remove last point if it's the same as the first (OSM ways are often closed)
       if (cleanPts.length > 1) {
-        const first = cleanPts[0];
-        const last = cleanPts[cleanPts.length - 1];
-        if (Math.abs(first.x - last.x) < 0.001 && Math.abs(first.z - last.z) < 0.001) {
-          cleanPts.pop();
-        }
+        const first = cleanPts[0], last = cleanPts[cleanPts.length - 1];
+        if (Math.abs(first.x - last.x) < 0.001 && Math.abs(first.z - last.z) < 0.001) cleanPts.pop();
       }
-
       if (cleanPts.length < 3) return new THREE.BufferGeometry();
-
-      // Ensure counter-clockwise winding order so normals point OUTWARD.
       const vec2s = cleanPts.map(p => new THREE.Vector2(p.x, -p.z));
-      if (THREE.ShapeUtils.isClockWise(vec2s)) {
-        cleanPts.reverse();
-      }
-
+      if (THREE.ShapeUtils.isClockWise(vec2s)) cleanPts.reverse();
       const shape = new THREE.Shape();
       shape.moveTo(cleanPts[0].x, -cleanPts[0].z);
-      for (let i = 1; i < cleanPts.length; i++) {
-        shape.lineTo(cleanPts[i].x, -cleanPts[i].z);
-      }
-
-      const height = (b.levels || CONFIG.DEFAULT_LEVELS) * CONFIG.METERS_PER_LEVEL * METER; // 3m per level properly scaled to scene units
-      const geometry = new THREE.ExtrudeGeometry(shape, {
-        depth: height,
-        bevelEnabled: false,
-      });
-
+      for (let i = 1; i < cleanPts.length; i++) shape.lineTo(cleanPts[i].x, -cleanPts[i].z);
+      const height = (b.levels || CONFIG.DEFAULT_LEVELS) * CONFIG.METERS_PER_LEVEL * METER;
+      const geometry = new THREE.ExtrudeGeometry(shape, { depth: height, bevelEnabled: false });
       geometry.rotateX(-Math.PI / 2);
       geometry.computeVertexNormals();
       return geometry;
     } catch (err) {
-      console.warn("Failed to generate geometry for building", b.id);
       return new THREE.BufferGeometry();
     }
   }, [b]);
@@ -143,11 +122,7 @@ function OsmBuildings({ buildings }: { buildings: OsmBuilding[] }) {
   return (
     <group>
       {buildings.map((b, i) => (
-        <BuildingMesh
-          key={b.id}
-          b={b}
-          color={BUILDING_COLORS[i % BUILDING_COLORS.length]}
-        />
+        <BuildingMesh key={b.id} b={b} color={BUILDING_COLORS[i % BUILDING_COLORS.length]} />
       ))}
     </group>
   );
@@ -162,9 +137,15 @@ interface SceneProps {
   accidents?: AccidentEvent[];
 }
 
-function WorldContent({ hour, onRoadInfo, onLoadingChange, onMetrics, onAccident, accidents = [] }: SceneProps) {
-  const { roads, loading: roadsLoading } = useOsmRoads();
-  const { buildings, loading: bldgLoading } = useOsmBuildings();
+interface WorldContentProps extends SceneProps {
+    center: LatLng;
+}
+
+function WorldContent({ hour, onRoadInfo, onLoadingChange, onMetrics, onAccident, accidents = [], center }: WorldContentProps) {
+  const { roads, loading: roadsLoading } = useOsmRoads(center);
+  const { buildings, loading: bldgLoading } = useOsmBuildings(center);
+  const [trafficData, setTrafficData] = useState<Record<number, number>>({});
+  const [jammedRoads, setJammedRoads] = useState<Record<string, { fwd: boolean, bwd: boolean }>>({});
   const loading = roadsLoading && bldgLoading;
 
   const signalMapRef = useRef<TrafficSignalMap>(new Map());
@@ -186,16 +167,13 @@ function WorldContent({ hour, onRoadInfo, onLoadingChange, onMetrics, onAccident
     const id = setInterval(fetchHotspots, 30_000);
     return () => clearInterval(id);
   }, []);
-  const [trafficData, setTrafficData] = useState<Record<number, number>>({});
 
   useEffect(() => {
     axios
       .get(`${API_BASE}/traffic-data/?hour=${hour}`)
       .then((res) => {
         const map: Record<number, number> = {};
-        res.data.forEach((r: any) => {
-          map[r.id] = r.density;
-        });
+        res.data.forEach((r: any) => { map[r.id] = r.density; });
         setTrafficData(map);
       })
       .catch(() => {});
@@ -204,84 +182,36 @@ function WorldContent({ hour, onRoadInfo, onLoadingChange, onMetrics, onAccident
   const handleRoadClick = useCallback(
     (road: OsmRoad, density: number) => {
       const speed = Math.round((1 - density) * 60);
-      onRoadInfo(
-        `📍 ${road.name || road.highway}\n🚗 Vitesse: ~${speed} km/h\n🔴 Densité: ${Math.round(density * 100)}%`,
-      );
+      onRoadInfo(`📍 ${road.name || road.highway}\n🚗 Vitesse: ~${speed} km/h\n🔴 Densité: ${Math.round(density * 100)}%`);
     },
     [onRoadInfo],
   );
 
-  // Sun position based on hour
+  const handleMetrics = useCallback((m: TrafficMetrics) => {
+    setJammedRoads(m.jammedRoads || {});
+    onMetrics?.(m);
+  }, [onMetrics]);
+
   const sunAngle = ((hour - 6) / 12) * Math.PI;
-  const sunPos: [number, number, number] = [
-    Math.cos(sunAngle) * 200,
-    Math.sin(sunAngle) * 200,
-    -50,
-  ];
+  const sunPos = [Math.cos(sunAngle) * 100, Math.sin(sunAngle) * 100, 50];
 
   return (
-    <>
-      {/* Atmosphere */}
-      <Sky
-        sunPosition={sunPos}
-        turbidity={hour > 6 && hour < 20 ? 8 : 20}
-        rayleigh={hour > 6 && hour < 20 ? 2 : 0.5}
-      />
-      {hour < 6 || hour > 20 ? (
-        <Stars radius={200} depth={50} count={3000} factor={4} />
-      ) : null}
-      <fog
-        attach="fog"
-        args={[hour > 6 && hour < 20 ? "#b8cfe0" : "#0a0f1a", 100, 350]}
-      />
+    <Suspense fallback={null}>
+      <Sky sunPosition={sunPos as any} turbidity={0.1} rayleigh={0.5} />
+      <Stars radius={100} depth={50} count={5000} factor={4} saturation={0} fade speed={1} />
+      <ambientLight intensity={hour < 6 || hour > 18 ? 0.2 : 0.5} />
+      <directionalLight position={sunPos as any} intensity={hour < 6 || hour > 18 ? 0.1 : 1.2} castShadow />
 
-      {/* Lighting */}
-      <ambientLight
-        intensity={hour > 6 && hour < 20 ? 0.8 : 0.2}
-        color="#ffeedd"
-      />
-      <directionalLight
-        position={sunPos}
-        intensity={hour > 6 && hour < 20 ? 2 : 0.1}
-        castShadow
-        shadow-mapSize={[2048, 2048]}
-        shadow-camera-far={300}
-        shadow-camera-left={-100}
-        shadow-camera-right={100}
-        shadow-camera-top={100}
-        shadow-camera-bottom={-100}
-        shadow-bias={-0.001}
-        color="#fffaed"
-      />
-      {/* Fill light from the opposite side */}
-      <directionalLight
-        position={[-50, 30, 50]}
-        intensity={0.3}
-        color="#aaccff"
-      />
-
-      {/* World */}
       <Ground />
       <OsmBuildings buildings={buildings} />
-
-      {/* Loading indicator: spinning sphere when waiting for OSM data */}
-      {loading && (
-        <mesh position={[0, 5, 0]}>
-          <sphereGeometry args={[1]} />
-          <meshStandardMaterial
-            color="#3b82f6"
-            emissive="#3b82f6"
-            emissiveIntensity={1}
-          />
-        </mesh>
-      )}
-
-      {/* Real OSM roads — show as soon as roads data arrives */}
+      
       {!roadsLoading && (
-        <RoadNetwork
-          roads={roads}
-          trafficData={trafficData}
-          onRoadClick={handleRoadClick}
+        <RoadNetwork 
+          roads={roads} 
+          trafficData={trafficData} 
+          onRoadClick={handleRoadClick} 
+          jammedRoads={jammedRoads}
+          center={center}
         />
       )}
 
@@ -309,11 +239,12 @@ function WorldContent({ hour, onRoadInfo, onLoadingChange, onMetrics, onAccident
           runs first and advances phase timers before CarSystem reads them. */}
       {!roadsLoading && roads.length > 0 && (
         <>
-          <TrafficLightSystem roads={roads} signalMapRef={signalMapRef} />
+          <TrafficLightSystem roads={roads} center={center} signalMapRef={signalMapRef} />
           <CarSystem
             roads={roads}
             hour={hour}
-            onMetrics={onMetrics}
+            onMetrics={handleMetrics}
+            center={center}
             onAccident={onAccident}
             signalMapRef={signalMapRef}
             hotspots={hotspots}
@@ -323,52 +254,78 @@ function WorldContent({ hour, onRoadInfo, onLoadingChange, onMetrics, onAccident
 
       {/* Accident visual markers */}
       <AccidentMarkers accidents={accidents} hotspots={hotspots} />
-
-      {/* Helper */}
+      <OrbitControls makeDefault />
       <GizmoHelper alignment="bottom-right" margin={[80, 80]}>
-        <GizmoViewport labelColor="white" axisHeadScale={1} />
+        <GizmoViewport axisColors={["#ef4444", "#22c55e", "#3b82f6"]} labelColor="white" />
       </GizmoHelper>
-    </>
+    </Suspense>
   );
 }
 
-export default function Scene({
-  hour,
-  onRoadInfo,
-  onLoadingChange,
-  onMetrics,
-  onAccident,
-  accidents,
-}: SceneProps) {
+export default function Scene(props: SceneProps) {
+  const [center, setCenter] = useState<LatLng>(INITIAL_CENTER);
+
+  const move = (latD: number, lngD: number) => {
+    setCenter(prev => ({ lat: prev.lat + latD, lng: prev.lng + lngD }));
+  };
+
   return (
-    <div className="w-full h-full">
-      <Canvas
-        shadows
-        gl={{
-          antialias: true,
-          toneMapping: THREE.ACESFilmicToneMapping,
-          toneMappingExposure: 1.2,
-        }}
-        camera={{ position: [0, 60, 80], fov: 45 }}
-      >
-        <OrbitControls
-          makeDefault
-          maxPolarAngle={Math.PI / 2.05}
-          minDistance={10}
-          maxDistance={250}
-          target={[0, 0, 0]}
-        />
-        <Suspense fallback={null}>
-          <WorldContent
-            hour={hour}
-            onRoadInfo={onRoadInfo}
-            onLoadingChange={onLoadingChange}
-            onMetrics={onMetrics}
-            onAccident={onAccident}
-            accidents={accidents}
-          />
-        </Suspense>
+    <div className="relative w-full h-screen">
+      <Canvas shadows camera={{ position: [20, 20, 20], fov: 45 }}>
+        <WorldContent {...props} center={center} />
       </Canvas>
+
+      {/* Navigation UI Overlay */}
+      <div className="absolute inset-0 pointer-events-none z-10">
+        {/* Navigation Arrows */}
+        <div className="absolute inset-0 flex items-center justify-center p-8">
+            {/* North */}
+            <button 
+                onClick={() => move(CONFIG.ROAD_FETCH_RADIUS * 1.5, 0)}
+                className="absolute top-12 pointer-events-auto bg-slate-900/80 backdrop-blur-md p-3 rounded-2xl border border-slate-700/50 text-white shadow-2xl hover:bg-slate-800 hover:scale-110 transition-all active:scale-95 group"
+                title="Vers le Nord"
+            >
+                <ChevronUp className="group-hover:animate-bounce" size={28} />
+            </button>
+            {/* South */}
+            <button 
+                onClick={() => move(-CONFIG.ROAD_FETCH_RADIUS * 1.5, 0)}
+                className="absolute bottom-12 pointer-events-auto bg-slate-900/80 backdrop-blur-md p-3 rounded-2xl border border-slate-700/50 text-white shadow-2xl hover:bg-slate-800 hover:scale-110 transition-all active:scale-95 group"
+                title="Vers le Sud"
+            >
+                <ChevronDown className="group-hover:animate-bounce" size={28} />
+            </button>
+            {/* West */}
+            <button 
+                onClick={() => move(0, -CONFIG.ROAD_FETCH_RADIUS * 1.5)}
+                className="absolute left-12 pointer-events-auto bg-slate-900/80 backdrop-blur-md p-3 rounded-2xl border border-slate-700/50 text-white shadow-2xl hover:bg-slate-800 hover:scale-110 transition-all active:scale-95 group"
+                title="Vers l'Ouest"
+            >
+                <ChevronLeft className="group-hover:animate-bounce" size={28} />
+            </button>
+            {/* East */}
+            <button 
+                onClick={() => move(0, CONFIG.ROAD_FETCH_RADIUS * 1.5)}
+                className="absolute right-12 pointer-events-auto bg-slate-900/80 backdrop-blur-md p-3 rounded-2xl border border-slate-700/50 text-white shadow-2xl hover:bg-slate-800 hover:scale-110 transition-all active:scale-95 group"
+                title="Vers l'Est"
+            >
+                <ChevronRight className="group-hover:animate-bounce" size={28} />
+            </button>
+        </div>
+
+        {/* Current Location Badge */}
+        <div className="absolute top-8 left-1/2 -translate-x-1/2 pointer-events-auto bg-slate-950/90 backdrop-blur-xl border border-slate-800 px-4 py-2 rounded-full shadow-2xl flex items-center gap-3">
+            <div className="bg-blue-500/20 p-1.5 rounded-full">
+                <Navigation size={14} className="text-blue-400 rotate-45" />
+            </div>
+            <div className="flex flex-col">
+                <span className="text-[10px] text-slate-500 font-bold uppercase tracking-widest">Zone Actuelle</span>
+                <span className="text-xs font-mono text-white">
+                    {center.lat.toFixed(4)}, {center.lng.toFixed(4)}
+                </span>
+            </div>
+        </div>
+      </div>
     </div>
   );
 }

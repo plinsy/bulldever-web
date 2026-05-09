@@ -1,20 +1,9 @@
-import { CENTER, SCALE } from "../world/geo";
+import { LatLng, SCALE } from "../world/geo";
 
 /**
  * Named geographic zones for Antananarivo.
- * Bounds are defined as lat/lng rectangles and pre-converted to scene XZ
- * so membership tests run at 60 fps without recomputing projections.
+ * These are static Lat/Lng bounds.
  */
-export interface Zone {
-    id: string;
-    label: string;
-    /** Scene-space bounding box */
-    minX: number;
-    maxX: number;
-    minZ: number;
-    maxZ: number;
-}
-
 interface LatLngBounds {
     id: string;
     label: string;
@@ -35,29 +24,17 @@ const RAW_ZONES: LatLngBounds[] = [
     { id: "behoririka",  label: "Behoririka",  south: -18.9220, north: -18.9120, west: 47.5340, east: 47.5480 },
 ];
 
-function lngToX(lng: number): number {
-    return (lng - CENTER.lng) * SCALE;
-}
+/** 
+ * Returns the zone id the given scene position falls in, or null.
+ * Requires the current map center origin for inverse projection.
+ */
+export function classifyZone(x: number, z: number, center: LatLng): string | null {
+    // Inverse project: Scene -> Lat/Lng
+    const lng = x / SCALE + center.lng;
+    const lat = -z / SCALE + center.lat;
 
-function latToZ(lat: number): number {
-    return -(lat - CENTER.lat) * SCALE;
-}
-
-/** Pre-projected zones – computed once at module load. */
-export const ZONES: Zone[] = RAW_ZONES.map((z) => ({
-    id: z.id,
-    label: z.label,
-    minX: lngToX(z.west),
-    maxX: lngToX(z.east),
-    // lat increases northward → z decreases northward
-    minZ: latToZ(z.north),
-    maxZ: latToZ(z.south),
-}));
-
-/** Returns the zone id the given scene position falls in, or null. */
-export function classifyZone(x: number, z: number): string | null {
-    for (const zone of ZONES) {
-        if (x >= zone.minX && x <= zone.maxX && z >= zone.minZ && z <= zone.maxZ) {
+    for (const zone of RAW_ZONES) {
+        if (lat >= zone.south && lat <= zone.north && lng >= zone.west && lng <= zone.east) {
             return zone.id;
         }
     }

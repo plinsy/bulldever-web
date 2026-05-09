@@ -1,9 +1,9 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import * as THREE from "three";
 import * as BufferGeometryUtils from "three/examples/jsm/utils/BufferGeometryUtils.js";
-import { OsmRoad, CENTER, ROAD_WIDTHS } from "../world/geo";
+import { OsmRoad, LatLng, ROAD_WIDTHS } from "../world/geo";
 import { classifyZone } from "./zones";
 import { useFrame } from "@react-three/fiber";
 import { Html } from "@react-three/drei";
@@ -38,6 +38,8 @@ export interface TrafficMetrics {
     zoneStats: Record<string, ZoneStat>;
     /** car count per intersection index */
     intersectionCounts: Record<string, number>;
+    /** IDs of roads with high congestion per direction */
+    jammedRoads: Record<string, { fwd: boolean, bwd: boolean }>;
 }
 
 interface CarSystemProps {
@@ -45,6 +47,7 @@ interface CarSystemProps {
     hour: number;
     /** Called every frame with updated metrics */
     onMetrics?: (metrics: TrafficMetrics) => void;
+    center: LatLng;
     /** Called once per detected collision with the accident details */
     onAccident?: (event: AccidentEvent) => void;
     /** Shared signal map written by TrafficLightSystem; read here to stop cars at red lights. */
@@ -63,10 +66,10 @@ function generatePlate(): string {
     return `${prefix} ${digits}`;
 }
 
-function roadXZ(road: OsmRoad) {
-    return road.points.map((p: { lat: number; lng: number }) => {
-        const x = (p.lng - CENTER.lng) * CONFIG.SCALE;
-        const z = -(p.lat - CENTER.lat) * CONFIG.SCALE;
+function roadXZ(road: OsmRoad, center: LatLng) {
+    return road.points.map((p: LatLng) => {
+        const x = (p.lng - center.lng) * CONFIG.SCALE;
+        const z = -(p.lat - center.lat) * CONFIG.SCALE;
         return new THREE.Vector3(x, 0.02, z); // road surface level
     });
 }
@@ -81,7 +84,7 @@ function peakFactor(hour: number) {
  * Derive intersection nodes: points shared by ≥ 2 road endpoints.
  * Returns a small list of THREE.Vector3 intersection positions.
  */
-function deriveIntersections(roads: OsmRoad[]): THREE.Vector3[] {
+function deriveIntersections(roads: OsmRoad[], center: LatLng): THREE.Vector3[] {
     const key = (lat: number, lng: number) =>
         `${lat.toFixed(4)},${lng.toFixed(4)}`;
 
@@ -92,8 +95,8 @@ function deriveIntersections(roads: OsmRoad[]): THREE.Vector3[] {
         for (const p of endpoints) {
             const k = key(p.lat, p.lng);
             if (!counts.has(k)) {
-                const x = (p.lng - CENTER.lng) * CONFIG.SCALE;
-                const z = -(p.lat - CENTER.lat) * CONFIG.SCALE;
+                const x = (p.lng - center.lng) * CONFIG.SCALE;
+                const z = -(p.lat - center.lat) * CONFIG.SCALE;
                 counts.set(k, { count: 0, pos: new THREE.Vector3(x, 0, z) });
             }
             counts.get(k)!.count++;
@@ -134,7 +137,9 @@ async function postSnapshot(metrics: TrafficMetrics, hour: number): Promise<void
                 stopped_cars: metrics.stoppedCars,
                 cars_in_intersections: metrics.carsInIntersections,
                 avg_speed_kmh: metrics.avgSpeedKmh,
-                zone_counts: metrics.zoneStats,
+                zone_counts: Object.fromEntries(
+                    Object.entries(metrics.zoneStats).map(([id, stat]) => [id, stat.stopped])
+                ),
                 intersection_counts: metrics.intersectionCounts,
             }),
         });
@@ -143,7 +148,7 @@ async function postSnapshot(metrics: TrafficMetrics, hour: number): Promise<void
     }
 }
 
-export default function CarSystem({ roads, hour, onMetrics, onAccident, signalMapRef, hotspots = [] }: CarSystemProps) {
+export default function CarSystem({ roads, hour, onMetrics, center, onAccident, signalMapRef, hotspots = [] }: CarSystemProps) {
     const chassisRef = useRef<THREE.InstancedMesh>(null!);
     const cabinRef = useRef<THREE.InstancedMesh>(null!);
     const headLightsRef = useRef<THREE.InstancedMesh>(null!);
@@ -156,7 +161,7 @@ export default function CarSystem({ roads, hour, onMetrics, onAccident, signalMa
     const collidedPairsRef = useRef<Set<string>>(new Set());
     const frameCountRef = useRef<number>(0);
 
-    const intersections = useMemo(() => deriveIntersections(roads), [roads]);
+    const intersections = useMemo(() => deriveIntersections(roads, center), [roads, center]);
 
     const roadConnections = useMemo(() => {
         const map = new Map<number, { roadIdx: number, myEnd: number, theirEnd: number }[]>();
@@ -212,7 +217,7 @@ export default function CarSystem({ roads, hour, onMetrics, onAccident, signalMa
     const carState = useMemo(() => {
         if (!roads.length) return [];
         const sortedRoads = roads.map((r, i) => {
-            const pts = roadXZ(r);
+            const pts = roadXZ(r, center);
             let cx = 0, cz = 0;
             if (pts.length) { cx = pts[0].x; cz = pts[0].z; }
             return { idx: i, distSq: cx*cx + cz*cz };
@@ -255,10 +260,10 @@ export default function CarSystem({ roads, hour, onMetrics, onAccident, signalMa
 
     const roadCurves = useMemo(() =>
         roads.map((r) => {
-            const pts = roadXZ(r);
+            const pts = roadXZ(r, center);
             return pts.length >= 2 ? new THREE.CatmullRomCurve3(pts) : null;
         }),
-    [roads]);
+    [roads, center]);
 
     const carGeos = useMemo(() => {
         const chassis = new THREE.BoxGeometry(1.8 * METER, 0.6 * METER, 4.0 * METER);
@@ -296,9 +301,11 @@ export default function CarSystem({ roads, hour, onMetrics, onAccident, signalMa
         let speedSum = 0;
         const zoneStats: Record<string, ZoneStat> = {};
         const intersectionCounts: Record<string, number> = {};
+        const stoppedPerRoad: Record<number, { fwd: number, bwd: number }> = {};
 
         carState.forEach((car, i) => {
             if (car.isExploded) {
+                car.currentActualSpeed = 0;
                 car.smokeTimer += CONFIG.SMOKE_ANIM_SPEED;
                 const lifetime = CONFIG.SMOKE_LIFETIME;
                 for (let p = 0; p < 8; p++) {
@@ -326,7 +333,10 @@ export default function CarSystem({ roads, hour, onMetrics, onAccident, signalMa
                 tailLightsRef.current.setMatrixAt(i, dummy.matrix);
                 tempColor.set("#1a1a1a");
                 chassisRef.current.setColorAt(i, tempColor);
-                stopped++; // Exploded car is stopped
+                const dirKey = car.direction === 1 ? 'fwd' : 'bwd';
+                stopped++; 
+                if (!stoppedPerRoad[car.roadIdx]) stoppedPerRoad[car.roadIdx] = { fwd: 0, bwd: 0 };
+                stoppedPerRoad[car.roadIdx][dirKey]++;
                 return;
             }
 
@@ -344,7 +354,8 @@ export default function CarSystem({ roads, hour, onMetrics, onAccident, signalMa
                 if (i === j || !otherCar.initialized || !car.initialized) return;
                 const sameRoadAndDir = (otherCar.roadIdx === car.roadIdx && otherCar.direction === car.direction);
                 if (otherCar.roadIdx === car.roadIdx && otherCar.direction !== car.direction) return;
-                if (!sameRoadAndDir && i > j) return;
+                // Optimization: skip if on different road and i > j, UNLESS other car is exploded (static obstacle)
+                if (!sameRoadAndDir && i > j && !otherCar.isExploded) return;
                 const toOther = new THREE.Vector3().subVectors(otherCar.currentPos, car.currentPos);
                 const dist = toOther.length();
                 if (dist < CONFIG.RADAR_DISTANCE * METER) {
@@ -471,7 +482,7 @@ export default function CarSystem({ roads, hour, onMetrics, onAccident, signalMa
             const targetLaneOffset = roadWidth > CONFIG.NARROW_ROAD_LIMIT * METER ? CONFIG.LANE_OFFSET * METER : 0;
             car.currentLaneOffset = THREE.MathUtils.lerp(car.currentLaneOffset, targetLaneOffset, CONFIG.LERP_LANE_OFFSET);
             const side = new THREE.Vector3(forward.z, 0, -forward.x).normalize().multiplyScalar(car.currentLaneOffset);
-            const yOffset = 0.02;
+            const yOffset = 0.1; // Elevated to avoid raycast fighting with road
             const targetPos = new THREE.Vector3(pos.x + side.x, yOffset, pos.z + side.z);
             const targetLookAt = new THREE.Vector3(targetPos.x + forward.x, yOffset, targetPos.z + forward.z);
 
@@ -503,12 +514,17 @@ export default function CarSystem({ roads, hour, onMetrics, onAccident, signalMa
             chassisRef.current.setColorAt(i, tempColor);
 
             // --- Metrics ---
+            const dirKey = car.direction === 1 ? 'fwd' : 'bwd';
             const effectiveSpeed = currentSpeed * (0.2 + pf * 0.8);
             const isStopped = effectiveSpeed < STOPPED_SPEED_THRESHOLD;
             speedSum += effectiveSpeed;
-            if (isStopped) stopped++;
+            if (isStopped) {
+                stopped++;
+                if (!stoppedPerRoad[car.roadIdx]) stoppedPerRoad[car.roadIdx] = { fwd: 0, bwd: 0 };
+                stoppedPerRoad[car.roadIdx][dirKey]++;
+            }
 
-            const zoneId = classifyZone(pos.x, pos.z);
+            const zoneId = classifyZone(pos.x, pos.z, center);
             if (zoneId !== null) {
                 if (!zoneStats[zoneId]) zoneStats[zoneId] = { total: 0, stopped: 0 };
                 zoneStats[zoneId].total++;
@@ -523,6 +539,17 @@ export default function CarSystem({ roads, hour, onMetrics, onAccident, signalMa
                     intersectionCounts[key] = (intersectionCounts[key] ?? 0) + 1;
                 }
             });
+        });
+
+        const jammedRoads: Record<string, { fwd: boolean, bwd: boolean }> = {};
+        Object.entries(stoppedPerRoad).forEach(([roadIdx, counts]) => {
+            const idx = Number(roadIdx);
+            if (roads[idx]) {
+                jammedRoads[String(roads[idx].id)] = {
+                    fwd: counts.fwd >= CONFIG.JAM_CAR_COUNT,
+                    bwd: counts.bwd >= CONFIG.JAM_CAR_COUNT
+                };
+            }
         });
 
         chassisRef.current.instanceMatrix.needsUpdate = true;
@@ -573,8 +600,10 @@ export default function CarSystem({ roads, hour, onMetrics, onAccident, signalMa
             avgSpeedKmh: Math.round(sceneSpeedToKmh(avgSceneSpeed) * 10) / 10,
             zoneStats,
             intersectionCounts,
+            jammedRoads,
         };
         onMetrics?.(metrics);
+
 
         const now = state.clock.getElapsedTime() * 1000;
         if (now - lastSnapshotRef.current >= SNAPSHOT_INTERVAL_MS) {
@@ -596,7 +625,7 @@ export default function CarSystem({ roads, hour, onMetrics, onAccident, signalMa
                                 background: "rgba(0,0,0,0.8)", color: "white", padding: "12px", borderRadius: "8px", border: "1px solid #444", minWidth: "150px", pointerEvents: "auto", backdropFilter: "blur(4px)", fontSize: "14px", userSelect: "none"
                             }}>
                                 <div style={{ fontWeight: "bold", marginBottom: "5px" }}>Véhicule #{selectedIdx}</div>
-                                <div>Vitesse: {(selectedCar.baseSpeed * 5000).toFixed(0)} km/h</div>
+                                <div style={{ color: "#aaa" }}>Vitesse: <span style={{ color: "#fff" }}>{sceneSpeedToKmh(selectedCar.currentActualSpeed).toFixed(1)} km/h</span></div>
                                 <div>Route: {roads[selectedCar.roadIdx].highway} ({roads[selectedCar.roadIdx].name || "Sans nom"})</div>
                                 <div style={{ marginTop: "10px" }}>
                                     <button onClick={(e) => { e.stopPropagation(); selectedCar.isExploded = !selectedCar.isExploded; setSelectedIdx(null); }} style={{ background: selectedCar.isExploded ? "#22c55e" : "#ef4444", color: "white", border: "none", padding: "5px 10px", borderRadius: "4px", cursor: "pointer", width: "100%", fontWeight: "bold" }}>
@@ -609,22 +638,38 @@ export default function CarSystem({ roads, hour, onMetrics, onAccident, signalMa
                 </group>
             )}
 
-            <instancedMesh ref={chassisRef} args={[carGeos.chassis, null as any, CONFIG.MAX_CARS]} castShadow onClick={(e) => { e.stopPropagation(); setSelectedIdx(e.instanceId!); }} onPointerMissed={() => setSelectedIdx(null)}>
+            <instancedMesh 
+                ref={chassisRef} 
+                args={[carGeos.chassis, null as any, CONFIG.MAX_CARS]} 
+                castShadow 
+                onClick={(e) => { 
+                    e.stopPropagation(); 
+                    const id = e.instanceId!;
+                    // If clicking the SAME car and it's exploded, repair it immediately
+                    if (selectedIdx === id && carState[id].isExploded) {
+                        carState[id].isExploded = false;
+                        setSelectedIdx(null);
+                    } else {
+                        setSelectedIdx(id); 
+                    }
+                }} 
+                onPointerMissed={() => setSelectedIdx(null)}
+            >
                 <meshStandardMaterial roughness={0.5} metalness={0.6} />
             </instancedMesh>
-            <instancedMesh ref={cabinRef} args={[carGeos.cabin, null as any, CONFIG.MAX_CARS]} castShadow>
+            <instancedMesh ref={cabinRef} args={[carGeos.cabin, null as any, CONFIG.MAX_CARS]} castShadow raycast={() => null}>
                 <meshStandardMaterial color="#111" roughness={0.1} metalness={0.9} />
             </instancedMesh>
-            <instancedMesh ref={headLightsRef} args={[carGeos.headlights, null as any, CONFIG.MAX_CARS]}>
+            <instancedMesh ref={headLightsRef} args={[carGeos.headlights, null as any, CONFIG.MAX_CARS]} raycast={() => null}>
                 <meshStandardMaterial color="#fff" emissive="#fff" emissiveIntensity={2} />
             </instancedMesh>
-            <instancedMesh ref={tailLightsRef} args={[carGeos.taillights, null as any, CONFIG.MAX_CARS]}>
+            <instancedMesh ref={tailLightsRef} args={[carGeos.taillights, null as any, CONFIG.MAX_CARS]} raycast={() => null}>
                 <meshStandardMaterial color="#f00" emissive="#f00" emissiveIntensity={2} />
             </instancedMesh>
-            <instancedMesh ref={wheelRef} args={[carGeos.wheels, null as any, CONFIG.MAX_CARS]}>
+            <instancedMesh ref={wheelRef} args={[carGeos.wheels, null as any, CONFIG.MAX_CARS]} raycast={() => null}>
                 <meshStandardMaterial color="#050505" roughness={0.9} />
             </instancedMesh>
-            <instancedMesh ref={smokeRef} args={[new THREE.SphereGeometry(0.5, 8, 8), null as any, CONFIG.MAX_CARS * 8]}>
+            <instancedMesh ref={smokeRef} args={[new THREE.SphereGeometry(0.5, 8, 8), null as any, CONFIG.MAX_CARS * 8]} raycast={() => null}>
                 <meshStandardMaterial color="#444" transparent opacity={0.6} />
             </instancedMesh>
         </group>
