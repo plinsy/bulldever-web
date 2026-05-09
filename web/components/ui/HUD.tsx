@@ -1,6 +1,8 @@
 "use client";
 
-import { Navigation, MessageSquare, Loader2 } from "lucide-react";
+import { Navigation, MessageSquare, Loader2, User } from "lucide-react";
+import Link from "next/link";
+import { useAuth } from "@/contexts/AuthContext";
 
 interface HUDProps {
     hour: number;
@@ -11,6 +13,8 @@ interface HUDProps {
 }
 
 export default function HUD({ toggleChat, isLoading, retryAttempt = 0 }: HUDProps) {
+    const { user } = useAuth();
+
     return (
         <div className="fixed inset-0 pointer-events-none p-5 flex flex-col justify-between">
             {/* Top Bar */}
@@ -35,12 +39,26 @@ export default function HUD({ toggleChat, isLoading, retryAttempt = 0 }: HUDProp
                     )}
                 </div>
 
-                <button
-                    onClick={toggleChat}
-                    className="bg-blue-600 hover:bg-blue-500 active:scale-95 text-white p-3 rounded-full shadow-2xl transition-all"
-                >
-                    <MessageSquare size={22} />
-                </button>
+                <div className="flex items-center gap-2">
+                    <Link
+                        href={user ? "/dashboard" : "/auth"}
+                        className="bg-slate-800/90 hover:bg-slate-700 active:scale-95 text-white p-3 rounded-full shadow-2xl transition-all flex items-center gap-1.5"
+                        title={user ? `Espace ${user.role_display}` : "Connexion"}
+                    >
+                        <User size={20} />
+                        {user && (
+                            <span className="text-xs font-medium pr-1 max-w-20 truncate hidden sm:block">
+                                {user.username}
+                            </span>
+                        )}
+                    </Link>
+                    <button
+                        onClick={toggleChat}
+                        className="bg-blue-600 hover:bg-blue-500 active:scale-95 text-white p-3 rounded-full shadow-2xl transition-all"
+                    >
+                        <MessageSquare size={22} />
+                    </button>
+                </div>
             </div>
         </div>
     );
