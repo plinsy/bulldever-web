@@ -1,23 +1,15 @@
 "use client";
 
-import { useMemo, useRef } from "react";
+import { useMemo, useRef, useState } from "react";
 import * as THREE from "three";
 import * as BufferGeometryUtils from "three/examples/jsm/utils/BufferGeometryUtils.js";
-import { OsmRoad, CENTER, SCALE, METER } from "../world/geo";
+import { OsmRoad, CENTER, ROAD_WIDTHS } from "../world/geo";
 import { useFrame } from "@react-three/fiber";
+import { Html } from "@react-three/drei";
+import * as CONFIG from "./config";
 
-const MAX_CARS = 50;
-
-// Car color palette – varied realistic vehicle colors
-const CAR_COLORS = [
-    new THREE.Color("#60a5fa"), // blue
-    new THREE.Color("#f87171"), // red
-    new THREE.Color("#fbbf24"), // yellow
-    new THREE.Color("#a3e635"), // lime
-    new THREE.Color("#e2e8f0"), // white
-    new THREE.Color("#94a3b8"), // silver
-    new THREE.Color("#f97316"), // orange
-];
+const METER = CONFIG.METER;
+const CAR_COLORS = CONFIG.CAR_COLORS.map(c => new THREE.Color(c));
 
 interface CarSystemProps {
     roads: OsmRoad[];
@@ -26,16 +18,16 @@ interface CarSystemProps {
 
 function roadXZ(road: OsmRoad) {
     return road.points.map((p: { lat: number; lng: number }) => {
-        const x = (p.lng - CENTER.lng) * SCALE;
-        const z = -(p.lat - CENTER.lat) * SCALE;
+        const x = (p.lng - CENTER.lng) * CONFIG.SCALE;
+        const z = -(p.lat - CENTER.lat) * CONFIG.SCALE;
         return new THREE.Vector3(x, 0.02, z); // road surface level
     });
 }
 
 function peakFactor(hour: number) {
-    if ((hour >= 7 && hour <= 9) || (hour >= 16 && hour <= 19)) return 0.8;
-    if (hour >= 10 && hour <= 15) return 0.4;
-    return 0.15;
+    if ((hour >= 7 && hour <= 9) || (hour >= 16 && hour <= 19)) return CONFIG.PEAK_HOUR_MAX_SPEED_FACTOR * 0.8;
+    if (hour >= 10 && hour <= 15) return CONFIG.PEAK_HOUR_MAX_SPEED_FACTOR * 0.5;
+    return CONFIG.PEAK_HOUR_MIN_SPEED_FACTOR;
 }
 
 export default function CarSystem({ roads, hour }: CarSystemProps) {
@@ -49,27 +41,53 @@ export default function CarSystem({ roads, hour }: CarSystemProps) {
         for (let i = 0; i < roads.length; i++) {
             const p1 = roads[i].points;
             if (p1.length < 2) continue;
-            const end1 = p1[p1.length - 1];
-            const start1 = p1[0];
 
             for (let j = i + 1; j < roads.length; j++) {
                 const p2 = roads[j].points;
                 if (p2.length < 2) continue;
-                // Check if endpoints are close (within ~15m)
-                const check = (a: any, b: any) => Math.abs(a.lat - b.lat) < 0.00015 && Math.abs(a.lng - b.lng) < 0.00015;
-                
-                if (check(start1, p2[0])) {
-                    map.get(i)!.push({ roadIdx: j, myEnd: 0, theirEnd: 0 });
-                    map.get(j)!.push({ roadIdx: i, myEnd: 0, theirEnd: 0 });
-                } else if (check(start1, p2[p2.length - 1])) {
-                    map.get(i)!.push({ roadIdx: j, myEnd: 0, theirEnd: 1 });
-                    map.get(j)!.push({ roadIdx: i, myEnd: 1, theirEnd: 0 });
-                } else if (check(end1, p2[0])) {
-                    map.get(i)!.push({ roadIdx: j, myEnd: 1, theirEnd: 0 });
-                    map.get(j)!.push({ roadIdx: i, myEnd: 0, theirEnd: 1 });
-                } else if (check(end1, p2[p2.length - 1])) {
-                    map.get(i)!.push({ roadIdx: j, myEnd: 1, theirEnd: 1 });
-                    map.get(j)!.push({ roadIdx: i, myEnd: 1, theirEnd: 1 });
+
+                // Threshold for connection
+                const THRESH = CONFIG.INTERSECTION_THRESH;
+                const check = (pA: any, pB: any) => Math.abs(pA.lat - pB.lat) < THRESH && Math.abs(pA.lng - pB.lng) < THRESH;
+
+                // 1. Check if endpoints of road i connect to ANY point of road j
+                const ends1 = [0, p1.length - 1];
+                for (const idx1 of ends1) {
+                    for (let idx2 = 0; idx2 < p2.length; idx2++) {
+                        if (check(p1[idx1], p2[idx2])) {
+                            const myEnd = idx1 === 0 ? 0 : 1;
+                            const theirEnd = idx2 / (p2.length - 1);
+                            
+                            // Prioritize endpoints (0 or 1) over middle points
+                            const weight = (idx2 === 0 || idx2 === p2.length - 1) ? 0 : 1;
+
+                            // Avoid duplicates or prefer endpoints
+                            const existingIdx = map.get(i)!.findIndex(conn => conn.roadIdx === j && Math.abs(conn.myEnd - myEnd) < 0.1);
+                            if (existingIdx === -1) {
+                                map.get(i)!.push({ roadIdx: j, myEnd, theirEnd });
+                                map.get(j)!.push({ roadIdx: i, myEnd: theirEnd, theirEnd: myEnd });
+                            }
+                        }
+                    }
+                }
+
+                // 2. Check if endpoints of road j connect to ANY point of road i
+                const ends2 = [0, p2.length - 1];
+                for (const idx2 of ends2) {
+                    for (let idx1 = 0; idx1 < p1.length; idx1++) {
+                        if (ends1.includes(idx1)) continue; 
+                        
+                        if (check(p2[idx2], p1[idx1])) {
+                            const theirEnd = idx2 === 0 ? 0 : 1;
+                            const myEnd = idx1 / (p1.length - 1);
+
+                            const existingIdx = map.get(i)!.findIndex(conn => conn.roadIdx === j && Math.abs(conn.myEnd - myEnd) < 0.1);
+                            if (existingIdx === -1) {
+                                map.get(i)!.push({ roadIdx: j, myEnd, theirEnd });
+                                map.get(j)!.push({ roadIdx: i, myEnd: theirEnd, theirEnd: myEnd });
+                            }
+                        }
+                    }
                 }
             }
         }
@@ -89,21 +107,41 @@ export default function CarSystem({ roads, hour }: CarSystemProps) {
             return { idx: i, distSq: cx*cx + cz*cz };
         }).sort((a, b) => a.distSq - b.distSq);
         
-        const closestRoads = sortedRoads.slice(0, Math.max(1, Math.min(50, sortedRoads.length)));
+        const closestRoads = sortedRoads.slice(0, Math.max(1, Math.min(CONFIG.MAX_CARS, sortedRoads.length)));
 
-        return Array.from({ length: MAX_CARS }, (_, i) => {
-            // Physical base speed in scene units per frame (~25 to 50 km/h)
-            const baseSpeed = 0.005 + Math.random() * 0.01;
+        return Array.from({ length: CONFIG.MAX_CARS }, (_, i) => {
+            const roadIdx = closestRoads[i % closestRoads.length].idx;
+            const road = roads[roadIdx];
+            
+            // Physical base speed in scene units per frame
+            const baseSpeed = CONFIG.TRAFFIC_SPEED_MIN + Math.random() * (CONFIG.TRAFFIC_SPEED_MAX - CONFIG.TRAFFIC_SPEED_MIN);
+            
+            // Respect one-way roads
+            const direction = road.oneway ? 1 : (Math.random() > 0.5 ? 1 : -1);
+
+            // Dynamic Lane Offset based on road width
+            const roadWidth = ROAD_WIDTHS[road.highway] || CONFIG.NARROW_ROAD_LIMIT * METER;
+            const laneOffset = roadWidth > CONFIG.NARROW_ROAD_LIMIT * METER ? CONFIG.LANE_OFFSET * METER : 0;
+
             return {
-                roadIdx: closestRoads[i % closestRoads.length].idx,
+                roadIdx,
                 progress: Math.random(),
-                direction: Math.random() > 0.5 ? 1 : -1,
+                direction,
                 baseSpeed,
-                laneOffset: ((Math.random() - 0.5) * 2.0) * METER, // +/- 1 meter offset
+                laneOffset, 
+                currentLaneOffset: laneOffset,
                 colorIdx: Math.floor(Math.random() * CAR_COLORS.length),
                 currentPos: new THREE.Vector3(),
                 currentLookAt: new THREE.Vector3(),
                 initialized: false,
+                prevRoadIdx: -1,
+                isExploded: false,
+                smokeTimer: 0,
+                smokeSeeds: Array.from({ length: 8 }, () => ({
+                    offset: new THREE.Vector3(Math.random() - 0.5, 0, Math.random() - 0.5).multiplyScalar(METER),
+                    speed: 0.02 + Math.random() * 0.03,
+                    delay: Math.random() * 2
+                }))
             };
         });
     }, [roads]);
@@ -148,15 +186,72 @@ export default function CarSystem({ roads, hour }: CarSystemProps) {
     const headLightsRef = useRef<THREE.InstancedMesh>(null!);
     const tailLightsRef = useRef<THREE.InstancedMesh>(null!);
     const wheelRef = useRef<THREE.InstancedMesh>(null!);
+    const smokeRef = useRef<THREE.InstancedMesh>(null!);
+
+    const [selectedIdx, setSelectedIdx] = useState<number | null>(null);
 
     const dummy = useMemo(() => new THREE.Object3D(), []);
     const tempColor = useMemo(() => new THREE.Color(), []);
 
-    useFrame(() => {
+    useFrame((state) => {
         if (!chassisRef.current || !roadCurves.length) return;
         const pf = peakFactor(hour);
+        const time = state.clock.elapsedTime;
 
         carState.forEach((car, i) => {
+            if (car.isExploded) {
+                // Animate 8 smoke particles
+                car.smokeTimer += CONFIG.SMOKE_ANIM_SPEED;
+                const lifetime = CONFIG.SMOKE_LIFETIME;
+                for (let p = 0; p < 8; p++) {
+                    const seed = car.smokeSeeds[p];
+                    const life = (car.smokeTimer + seed.delay) % lifetime; 
+                    const t = life / lifetime;
+                    
+                    const smokeIdx = i * 8 + p;
+                    const rise = t * CONFIG.SMOKE_RISE_HEIGHT * METER;
+                    const drift = Math.sin(car.smokeTimer + p) * 0.8 * METER;
+                    
+                    dummy.position.copy(car.currentPos)
+                        .add(new THREE.Vector3(0, 1.0 * METER, 0)) 
+                        .add(seed.offset)
+                        .add(new THREE.Vector3(drift, rise, 0));
+                    
+                    const size = (1.0 - t) * CONFIG.SMOKE_SIZE; // Shrink as it rises
+                    dummy.scale.setScalar(size);
+                    dummy.updateMatrix();
+                    smokeRef.current.setMatrixAt(smokeIdx, dummy.matrix);
+                }
+                
+                // Keep car in place with burnt look
+                dummy.position.copy(car.currentPos);
+                dummy.lookAt(car.currentLookAt);
+                dummy.scale.setScalar(1);
+                dummy.updateMatrix();
+                
+                chassisRef.current.setMatrixAt(i, dummy.matrix);
+                cabinRef.current.setMatrixAt(i, dummy.matrix);
+                wheelRef.current.setMatrixAt(i, dummy.matrix);
+
+                // Turn off lights (scale to 0)
+                dummy.scale.setScalar(0);
+                dummy.updateMatrix();
+                headLightsRef.current.setMatrixAt(i, dummy.matrix);
+                tailLightsRef.current.setMatrixAt(i, dummy.matrix);
+
+                tempColor.set("#1a1a1a"); // Burnt black
+                chassisRef.current.setColorAt(i, tempColor);
+                return;
+            }
+
+            // Hide smoke for normal cars
+            for (let p = 0; p < 8; p++) {
+                dummy.scale.setScalar(0);
+                dummy.updateMatrix();
+                smokeRef.current.setMatrixAt(i * 8 + p, dummy.matrix);
+            }
+            dummy.scale.setScalar(1);
+
             const curve = roadCurves[car.roadIdx];
             if (!curve) return;
 
@@ -177,22 +272,22 @@ export default function CarSystem({ roads, hour }: CarSystemProps) {
                 const toOther = new THREE.Vector3().subVectors(otherCar.currentPos, car.currentPos);
                 const dist = toOther.length();
 
-                if (dist < 20.0 * METER) {
+                if (dist < CONFIG.RADAR_DISTANCE * METER) {
                     toOther.normalize();
                     const curveT = Math.max(0, Math.min(1, car.progress));
                     const fwd = curve.getTangentAt(curveT);
                     if (car.direction === -1) fwd.negate();
 
                     const dot = fwd.dot(toOther);
-                    if (dot > 0.85) {
+                    if (dot > CONFIG.RADAR_CONE_DOT) {
                         minDistanceInFront = Math.min(minDistanceInFront, dist);
                     }
                 }
             });
 
             let currentSpeed = car.baseSpeed;
-            const safeGap = 6.0 * METER;
-            const slowGap = 15.0 * METER;
+            const safeGap = CONFIG.SAFE_GAP * METER;
+            const slowGap = CONFIG.SLOW_GAP * METER;
 
             if (minDistanceInFront < safeGap) {
                 currentSpeed = 0;
@@ -209,16 +304,39 @@ export default function CarSystem({ roads, hour }: CarSystemProps) {
             // 2. Intersection & Bounce logic
             if (car.progress >= 1 || car.progress <= 0) {
                 const atEnd = car.progress >= 1 ? 1 : 0;
-                const conns = roadConnections.get(car.roadIdx)?.filter(c => c.myEnd === atEnd) || [];
+                // Use tolerance from config
+                const conns = roadConnections.get(car.roadIdx)?.filter(c => {
+                    if (Math.abs(c.myEnd - atEnd) > CONFIG.INTERSECTION_TOLERANCE) return false;
+                    const nextRoad = roads[c.roadIdx];
+                    // Don't enter a one-way road in the wrong direction
+                    // If we spawn at theirEnd=1, we would have direction -1. 
+                    // Not allowed if it's one-way.
+                    if (nextRoad.oneway && c.theirEnd === 1) return false;
+                    return true;
+                }) || [];
                 
-                if (conns.length > 0 && Math.random() > 0.2) {
-                    const conn = conns[Math.floor(Math.random() * conns.length)];
+                if (conns.length > 0) {
+                    // Filter out the road we just came from to avoid immediate U-turns
+                    const filteredConns = conns.filter(c => c.roadIdx !== car.prevRoadIdx);
+                    const options = filteredConns.length > 0 ? filteredConns : conns;
+                    
+                    // Turn seamlessly into the chosen connected road
+                    const conn = options[Math.floor(Math.random() * options.length)];
+                    car.prevRoadIdx = car.roadIdx; // Remember where we came from
                     car.roadIdx = conn.roadIdx;
                     car.progress = conn.theirEnd;
+                    // Drive away from the endpoint we just spawned on
                     car.direction = conn.theirEnd === 0 ? 1 : -1;
                 } else {
-                    car.progress = atEnd;
-                    car.direction *= -1;
+                    // Dead end, or no valid connection (respecting oneway)
+                    // If it's a one-way, we can't turn around! 
+                    // We'll just reset to the start or jump to a new road.
+                    if (roads[car.roadIdx].oneway) {
+                        car.progress = 0; 
+                    } else {
+                        car.progress = atEnd;
+                        car.direction *= -1; // reverse direction
+                    }
                 }
             }
 
@@ -227,7 +345,14 @@ export default function CarSystem({ roads, hour }: CarSystemProps) {
             const tang = curve.getTangentAt(t);
             
             const forward = car.direction === 1 ? tang : tang.clone().negate();
-            const side = new THREE.Vector3(-forward.z, 0, forward.x).normalize().multiplyScalar(car.laneOffset);
+            
+            // Smoothly transition lane offset (lerp from old road width to new road width)
+            const roadWidth = ROAD_WIDTHS[roads[car.roadIdx].highway] || CONFIG.NARROW_ROAD_LIMIT * METER;
+            const targetLaneOffset = roadWidth > CONFIG.NARROW_ROAD_LIMIT * METER ? CONFIG.LANE_OFFSET * METER : 0;
+            car.currentLaneOffset = THREE.MathUtils.lerp(car.currentLaneOffset, targetLaneOffset, CONFIG.LERP_LANE_OFFSET);
+
+            // Right-hand traffic: shift car to the right relative to its forward vector
+            const side = new THREE.Vector3(forward.z, 0, -forward.x).normalize().multiplyScalar(car.currentLaneOffset);
 
             const yOffset = 0.02; // Position on road
             const targetPos = new THREE.Vector3(pos.x + side.x, yOffset, pos.z + side.z);
@@ -238,7 +363,8 @@ export default function CarSystem({ roads, hour }: CarSystemProps) {
                 car.currentLookAt.copy(targetLookAt);
                 car.initialized = true;
             } else {
-                const moveSpeed = Math.max(0.01, currentSpeed * (0.2 + pf * 0.8) * 1.5);
+                // Higher move speed to make turns/transitions snappy but smooth
+                const moveSpeed = Math.max(0.01, currentSpeed * (0.2 + pf * 0.8) * CONFIG.TURN_SPEED_MULTIPLIER);
                 const toTarget = new THREE.Vector3().subVectors(targetPos, car.currentPos);
                 
                 if (toTarget.length() <= moveSpeed) {
@@ -247,7 +373,7 @@ export default function CarSystem({ roads, hour }: CarSystemProps) {
                     car.currentPos.add(toTarget.normalize().multiplyScalar(moveSpeed));
                 }
                 
-                car.currentLookAt.lerp(targetLookAt, 0.15);
+                car.currentLookAt.lerp(targetLookAt, CONFIG.LERP_LOOKAT);
             }
 
             dummy.position.copy(car.currentPos);
@@ -271,30 +397,94 @@ export default function CarSystem({ roads, hour }: CarSystemProps) {
         headLightsRef.current.instanceMatrix.needsUpdate = true;
         tailLightsRef.current.instanceMatrix.needsUpdate = true;
         wheelRef.current.instanceMatrix.needsUpdate = true;
+        smokeRef.current.instanceMatrix.needsUpdate = true;
     });
 
     if (!roads.length) return null;
 
+    const selectedCar = selectedIdx !== null ? carState[selectedIdx] : null;
+
     return (
         <group>
-            <instancedMesh ref={chassisRef} args={[carGeos.chassis, null as any, MAX_CARS]} castShadow>
+            {/* UI Overlay for Car Info */}
+            {selectedCar && (
+                <group>
+                    <mesh position={[selectedCar.currentPos.x, selectedCar.currentPos.y + 4 * METER, selectedCar.currentPos.z]}>
+                        <Html center>
+                            <div style={{
+                                background: "rgba(0,0,0,0.8)",
+                                color: "white",
+                                padding: "12px",
+                                borderRadius: "8px",
+                                border: "1px solid #444",
+                                minWidth: "150px",
+                                pointerEvents: "auto",
+                                backdropFilter: "blur(4px)",
+                                fontSize: "14px",
+                                userSelect: "none"
+                            }}>
+                                <div style={{ fontWeight: "bold", marginBottom: "5px" }}>Véhicule #{selectedIdx}</div>
+                                <div>Vitesse: {(selectedCar.baseSpeed * 5000).toFixed(0)} km/h</div>
+                                <div>Route: {roads[selectedCar.roadIdx].highway} ({roads[selectedCar.roadIdx].name || "Sans nom"})</div>
+                                <div style={{ marginTop: "10px" }}>
+                                    <button 
+                                        onClick={(e) => {
+                                            e.stopPropagation();
+                                            selectedCar.isExploded = !selectedCar.isExploded;
+                                            setSelectedIdx(null);
+                                        }}
+                                        style={{
+                                            background: selectedCar.isExploded ? "#22c55e" : "#ef4444",
+                                            color: "white",
+                                            border: "none",
+                                            padding: "5px 10px",
+                                            borderRadius: "4px",
+                                            cursor: "pointer",
+                                            width: "100%",
+                                            fontWeight: "bold"
+                                        }}
+                                    >
+                                        {selectedCar.isExploded ? "🔧 RÉPARER" : "💥 EXPLOSER !"}
+                                    </button>
+                                </div>
+                            </div>
+                        </Html>
+                    </mesh>
+                </group>
+            )}
+
+            <instancedMesh 
+                ref={chassisRef} 
+                args={[carGeos.chassis, null as any, CONFIG.MAX_CARS]} 
+                castShadow 
+                onClick={(e) => {
+                    e.stopPropagation();
+                    setSelectedIdx(e.instanceId!);
+                }}
+                onPointerMissed={() => setSelectedIdx(null)}
+            >
                 <meshStandardMaterial roughness={0.5} metalness={0.6} />
             </instancedMesh>
 
-            <instancedMesh ref={cabinRef} args={[carGeos.cabin, null as any, MAX_CARS]} castShadow>
+            <instancedMesh ref={cabinRef} args={[carGeos.cabin, null as any, CONFIG.MAX_CARS]} castShadow>
                 <meshStandardMaterial color="#111" roughness={0.1} metalness={0.9} />
             </instancedMesh>
 
-            <instancedMesh ref={headLightsRef} args={[carGeos.headlights, null as any, MAX_CARS]}>
+            <instancedMesh ref={headLightsRef} args={[carGeos.headlights, null as any, CONFIG.MAX_CARS]}>
                 <meshStandardMaterial color="#fff" emissive="#fff" emissiveIntensity={2} />
             </instancedMesh>
 
-            <instancedMesh ref={tailLightsRef} args={[carGeos.taillights, null as any, MAX_CARS]}>
+            <instancedMesh ref={tailLightsRef} args={[carGeos.taillights, null as any, CONFIG.MAX_CARS]}>
                 <meshStandardMaterial color="#f00" emissive="#f00" emissiveIntensity={2} />
             </instancedMesh>
 
-            <instancedMesh ref={wheelRef} args={[carGeos.wheels, null as any, MAX_CARS]}>
+            <instancedMesh ref={wheelRef} args={[carGeos.wheels, null as any, CONFIG.MAX_CARS]}>
                 <meshStandardMaterial color="#050505" roughness={0.9} />
+            </instancedMesh>
+
+            {/* Smoke System (multi-particle) */}
+            <instancedMesh ref={smokeRef} args={[new THREE.SphereGeometry(0.5, 8, 8), null as any, CONFIG.MAX_CARS * 8]}>
+                <meshStandardMaterial color="#444" transparent opacity={0.6} />
             </instancedMesh>
         </group>
     );

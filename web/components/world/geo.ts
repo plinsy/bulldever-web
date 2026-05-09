@@ -5,8 +5,13 @@ import * as THREE from "three";
 
 // Antananarivo center
 export const CENTER = { lat: -18.9137, lng: 47.5361 };
-export const SCALE = 8000;
-export const METER = SCALE / 111320; // 1 scene unit = ~13.9 meters, so 1 meter = 0.0718 scene units
+import { SCALE, METER, ROAD_WIDTH_METERS } from "../simulation/config";
+export { SCALE, METER };
+
+export const ROAD_WIDTHS: Record<string, number> = {};
+Object.entries(ROAD_WIDTH_METERS).forEach(([k, v]) => {
+    ROAD_WIDTHS[k] = v * METER;
+});
 
 // Bounding box for roads: ~3km radius
 const ROAD_BBOX = `${CENTER.lat - 0.03},${CENTER.lng - 0.04},${CENTER.lat + 0.03},${CENTER.lng + 0.04}`;
@@ -44,6 +49,7 @@ export interface OsmRoad {
     id: number;
     name: string;
     highway: string;
+    oneway: boolean;
     points: { lat: number; lng: number }[];
 }
 
@@ -80,6 +86,7 @@ export async function fetchOsmRoads(): Promise<OsmRoad[]> {
                     id: el.id,
                     name: el.tags?.name || "",
                     highway: el.tags?.highway || "road",
+                    oneway: el.tags?.oneway === "yes",
                     points,
                 });
             }

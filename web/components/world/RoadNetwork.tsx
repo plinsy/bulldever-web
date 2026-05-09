@@ -2,19 +2,7 @@
 
 import { useMemo } from "react";
 import * as THREE from "three";
-import { latLngToVector3, OsmRoad, METER } from "./geo";
-
-// Road visual widths properly scaled from meters to scene units
-const ROAD_WIDTHS: Record<string, number> = {
-    motorway: 8.0 * METER,
-    trunk: 7.0 * METER,
-    primary: 6.0 * METER,
-    secondary: 5.0 * METER,
-    tertiary: 4.0 * METER,
-    residential: 3.0 * METER,
-    service: 2.0 * METER,
-    unclassified: 3.0 * METER,
-};
+import { latLngToVector3, OsmRoad, METER, ROAD_WIDTHS } from "./geo";
 
 // Base asphalt colors per road type
 const ROAD_BASE: Record<string, string> = {
