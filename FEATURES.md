@@ -19,3 +19,5 @@
     - [X] Prediction heure de sortie ideale
 
 - [ ] DésIA-iser l'app
+- [ ] Personnaliser le Design Systeme de l'app
+- [ ] Ajouter une page d'accueil pour presenter l'app
