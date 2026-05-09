@@ -9,6 +9,7 @@ from rest_framework import status
 
 from traffic.models import RoadSegment
 from .models import UserProfile
+from .permissions import IsAnyRole, IsAgent
 from .serializers import RegisterSerializer, UserProfileSerializer
 
 
@@ -86,8 +87,9 @@ class MeView(APIView):
 
 
 class BlockedRoadsView(APIView):
-    """Returns road segments whose simulated density exceeds the given threshold."""
-    permission_classes = [IsAuthenticated]
+    """Returns road segments whose simulated density exceeds the given threshold.
+    Accessible to any authenticated user (all roles)."""
+    permission_classes = [IsAnyRole]
 
     def get(self, request):
         hour = int(request.query_params.get('hour', datetime.now().hour))
@@ -107,3 +109,23 @@ class BlockedRoadsView(APIView):
                 })
 
         return Response({'count': len(blocked), 'roads': blocked})
+
+
+class TrafficManagementView(APIView):
+    """Overview of all road densities — restricted to agent role only."""
+    permission_classes = [IsAgent]
+
+    def get(self, request):
+        hour = int(request.query_params.get('hour', datetime.now().hour))
+        peak_factor = _peak_factor(hour)
+        roads = []
+        for road in RoadSegment.objects.all():
+            density = min(1.0, peak_factor + (abs(hash(road.id)) % 10) / 30.0)
+            roads.append({
+                'id': road.id,
+                'name': road.name or 'Route sans nom',
+                'density': round(density, 2),
+                'congestion_level': _congestion_label(density),
+            })
+        roads.sort(key=lambda r: r['density'], reverse=True)
+        return Response({'hour': hour, 'total': len(roads), 'roads': roads})

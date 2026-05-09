@@ -77,11 +77,29 @@ export async function fetchBlockedRoads(hour?: number): Promise<BlockedRoadsResp
     return data;
 }
 
+export interface TrafficManagementRoad {
+    id: number;
+    name: string;
+    density: number;
+    congestion_level: "modere" | "fort" | "critique";
+}
+
+export interface TrafficManagementResponse {
+    hour: number;
+    total: number;
+    roads: TrafficManagementRoad[];
+}
+
+export async function fetchTrafficManagement(hour?: number): Promise<TrafficManagementResponse> {
+    const params = hour !== undefined ? { hour } : {};
+    const { data } = await apiClient.get<TrafficManagementResponse>("/users/traffic-management/", { params });
+    return data;
+}
+
 export interface PathResult {
-    path: { lat: number; lng: number }[];
     distance_km: number;
     duration_minutes: number;
-    steps: { lat: number; lng: number }[];
+    path: [number, number][];
 }
 
 export async function fetchBestPath(

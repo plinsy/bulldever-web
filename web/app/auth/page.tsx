@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, type FormEvent } from "react";
+import { useState, useEffect, type FormEvent } from "react";
 import { useRouter } from "next/navigation";
 import { Navigation, Loader2, AlertCircle } from "lucide-react";
 import { useAuth } from "@/contexts/AuthContext";
@@ -17,7 +17,14 @@ const ROLE_OPTIONS: { value: UserProfile["role"]; label: string }[] = [
 
 export default function AuthPage() {
     const router = useRouter();
-    const { login, register } = useAuth();
+    const { login, register, user, isLoading } = useAuth();
+
+    // Already authenticated → go to dashboard
+    useEffect(() => {
+        if (!isLoading && user) {
+            router.replace("/dashboard");
+        }
+    }, [isLoading, user, router]);
 
     const [mode, setMode] = useState<Mode>("login");
     const [username, setUsername] = useState("");
