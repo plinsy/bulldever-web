@@ -270,6 +270,7 @@ export default function CarSystem({ roads, hour, onMetrics, center }: CarSystemP
 
         carState.forEach((car, i) => {
             if (car.isExploded) {
+                car.currentActualSpeed = 0;
                 car.smokeTimer += CONFIG.SMOKE_ANIM_SPEED;
                 const lifetime = CONFIG.SMOKE_LIFETIME;
                 for (let p = 0; p < 8; p++) {
@@ -494,7 +495,7 @@ export default function CarSystem({ roads, hour, onMetrics, center }: CarSystemP
                                 background: "rgba(0,0,0,0.8)", color: "white", padding: "12px", borderRadius: "8px", border: "1px solid #444", minWidth: "150px", pointerEvents: "auto", backdropFilter: "blur(4px)", fontSize: "14px", userSelect: "none"
                             }}>
                                 <div style={{ fontWeight: "bold", marginBottom: "5px" }}>Véhicule #{selectedIdx}</div>
-                                <div>Vitesse: {(selectedCar.baseSpeed * 5000).toFixed(0)} km/h</div>
+                                <div style={{ color: "#aaa" }}>Vitesse: <span style={{ color: "#fff" }}>{sceneSpeedToKmh(selectedCar.currentActualSpeed).toFixed(1)} km/h</span></div>
                                 <div>Route: {roads[selectedCar.roadIdx].highway} ({roads[selectedCar.roadIdx].name || "Sans nom"})</div>
                                 <div style={{ marginTop: "10px" }}>
                                     <button onClick={(e) => { e.stopPropagation(); selectedCar.isExploded = !selectedCar.isExploded; setSelectedIdx(null); }} style={{ background: selectedCar.isExploded ? "#22c55e" : "#ef4444", color: "white", border: "none", padding: "5px 10px", borderRadius: "4px", cursor: "pointer", width: "100%", fontWeight: "bold" }}>
