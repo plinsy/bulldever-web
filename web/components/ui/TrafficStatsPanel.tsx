@@ -129,16 +129,3 @@ export default function TrafficStatsPanel({ metrics }: TrafficStatsPanelProps) {
         </div>
     );
 }
-
-                    </p>
-                    {topIntersections.map(([id, count]) => (
-                        <div key={id} className="flex justify-between text-xs py-0.5">
-                            <span className="text-slate-400">Intersection #{id}</span>
-                            <span className="text-white font-mono">{count} véh.</span>
-                        </div>
-                    ))}
-                </>
-            )}
-        </div>
-    );
-}
