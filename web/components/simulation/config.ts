@@ -4,10 +4,16 @@ import * as THREE from "three";
 export const SCALE = 8000;
 export const METER = SCALE / 111320; // 1 scene unit = ~13.9 meters
 
-// 2. Traffic Volume
+// 2. World & Architecture
+export const METERS_PER_LEVEL = 3.0; // Height of each building level in meters
+export const DEFAULT_LEVELS = 1;     // Default levels if OSM data is missing
+export const ROAD_FETCH_RADIUS = 0.03;      // Latitude radius in degrees (~3.3km)
+export const BUILDING_FETCH_RADIUS = 0.005;  // Latitude radius in degrees (~1.1km)
+
+// 3. Traffic Volume
 export const MAX_CARS = 60;
 
-// 3. Speeds (Physical Units per frame)
+// 4. Speeds (Physical Units per frame)
 export const TRAFFIC_SPEED_MIN = 0.005;
 export const TRAFFIC_SPEED_MAX = 0.015;
 export const TURN_SPEED_MULTIPLIER = 3.0; // How fast cars move during intersection transitions

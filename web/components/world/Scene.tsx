@@ -19,6 +19,7 @@ import {
 import * as THREE from "three";
 import RoadNetwork from "./RoadNetwork";
 import CarSystem, { TrafficMetrics } from "../simulation/CarSystem";
+import * as CONFIG from "../simulation/config";
 import {
   useOsmRoads,
   useOsmBuildings,
@@ -111,7 +112,7 @@ function BuildingMesh({ b, color }: { b: OsmBuilding; color: string }) {
         shape.lineTo(cleanPts[i].x, -cleanPts[i].z);
       }
 
-      const height = b.levels * 3.0 * METER; // 3m per level properly scaled to scene units
+      const height = (b.levels || CONFIG.DEFAULT_LEVELS) * CONFIG.METERS_PER_LEVEL * METER; // 3m per level properly scaled to scene units
       const geometry = new THREE.ExtrudeGeometry(shape, {
         depth: height,
         bevelEnabled: false,
