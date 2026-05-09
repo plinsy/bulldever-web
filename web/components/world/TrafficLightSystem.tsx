@@ -1,18 +1,20 @@
 "use client";
 
-import { useRef, useMemo, useEffect } from "react";
+import { useRef, useMemo } from "react";
 import { useFrame } from "@react-three/fiber";
 import * as THREE from "three";
 import { SCALE, METER } from "../simulation/config";
 import * as CONFIG from "../simulation/config";
-import type { OsmRoad, LatLng } from "./geo";
+import type { LatLng, OsmRoad } from "./geo";
 import type {
+    IntersectionSignal,
     TrafficSignalMap,
     TrafficPhase,
 } from "../simulation/trafficLightTypes";
 
 // ─── Qualification ───────────────────────────────────────────────────────────
 
+/** Road types eligible to have a traffic light at their intersection. */
 const SIGNAL_TYPES = new Set([
     "primary",
     "secondary",
@@ -20,12 +22,14 @@ const SIGNAL_TYPES = new Set([
     "residential",
 ]);
 
+/** At least one road of this type must be present for a signal to be placed. */
 const MAJOR_TYPES = new Set(["primary", "secondary", "tertiary"]);
 
 // ─── Internal data structures ────────────────────────────────────────────────
 
 interface ConnectedRoad {
     roadIdx: number;
+    /** true → road connects here at points[0]; false → at points[n-1] */
     atStart: boolean;
 }
 
@@ -38,6 +42,10 @@ interface IntersectionData {
 
 // ─── Pure derivation helpers (SRP) ───────────────────────────────────────────
 
+/**
+ * Returns the clockwise-from-north angle (radians) at which a road
+ * departs from its intersection endpoint into its own body.
+ */
 function approachAngle(road: OsmRoad, atStart: boolean): number {
     const pts = road.points;
     const from = atStart ? pts[0] : pts[pts.length - 1];
@@ -48,6 +56,10 @@ function approachAngle(road: OsmRoad, atStart: boolean): number {
     return Math.atan2(dx, -dz);
 }
 
+/**
+ * Assigns connected roads to two phases using an angular sort so that
+ * roughly parallel/opposing roads share the same phase.
+ */
 function assignPhases(
     roads: OsmRoad[],
     connected: ConnectedRoad[]
@@ -67,6 +79,7 @@ function assignPhases(
         else phaseB.add(entry.roadIdx);
     });
 
+    // Guarantee both phases are non-empty
     if (phaseB.size === 0 && phaseA.size > 1) {
         const first = [...phaseA][0];
         phaseA.delete(first);
@@ -76,6 +89,14 @@ function assignPhases(
     return { phaseA, phaseB };
 }
 
+/**
+ * Derives the set of intersections that should receive a traffic signal.
+ *
+ * An intersection qualifies when:
+ *  - ≥ 3 road endpoints share the same lat/lng key (= T-junction or better)
+ *  - At least one connecting road is of a major type (primary/secondary/tertiary)
+ *  - At least two distinct roads connect (deduplication step)
+ */
 function deriveSignaledIntersections(roads: OsmRoad[], center: LatLng): IntersectionData[] {
     const key = (lat: number, lng: number) =>
         `${lat.toFixed(4)},${lng.toFixed(4)}`;
@@ -124,6 +145,7 @@ function deriveSignaledIntersections(roads: OsmRoad[], center: LatLng): Intersec
     for (const entry of map.values()) {
         if (entry.count < 3 || !entry.hasMajor) continue;
 
+        // Remove duplicate road indices (loop roads whose both ends land here)
         const unique = entry.connected.filter(
             (c, i, arr) => arr.findIndex((x) => x.roadIdx === c.roadIdx) === i
         );
@@ -141,6 +163,7 @@ function deriveSignaledIntersections(roads: OsmRoad[], center: LatLng): Intersec
     return result;
 }
 
+/** Adaptive green duration formula (clamps to configured bounds). */
 function adaptGreenDuration(queueCount: number): number {
     return Math.max(
         CONFIG.SIGNAL_MIN_GREEN,
@@ -155,24 +178,39 @@ function adaptGreenDuration(queueCount: number): number {
 
 export interface TrafficLightSystemProps {
     roads: OsmRoad[];
-    signalMapRef: React.MutableRefObject<TrafficSignalMap>;
     center: LatLng;
+    /** Shared mutable ref – TrafficLightSystem advances phases; CarSystem updates queues. */
+    signalMapRef: React.MutableRefObject<TrafficSignalMap>;
 }
 
+/**
+ * TrafficLightSystem
+ *
+ * Responsibilities (SRP):
+ *  1. Derive qualified intersections from the road network.
+ *  2. Initialise the shared signal map.
+ *  3. Advance phase timers and adapt green durations each frame.
+ *  4. Render 3-D traffic-light poles.
+ *
+ * Queue counts (phaseA/BQueueCount) are written by CarSystem each frame;
+ * this component only reads them to compute the next phase duration.
+ */
 export default function TrafficLightSystem({
     roads,
-    signalMapRef,
     center,
+    signalMapRef,
 }: TrafficLightSystemProps) {
     const intersections = useMemo(
         () => deriveSignaledIntersections(roads, center),
         [roads, center]
     );
 
-    // Initialisation: populate signalMapRef when intersections change (due to map movement)
-    useEffect(() => {
+    // One-time initialisation: populate signalMapRef when intersections are ready
+    const initializedRef = useRef(false);
+    if (!initializedRef.current && intersections.length > 0) {
         signalMapRef.current.clear();
         intersections.forEach((inter, i) => {
+            // Stagger phases so not every intersection turns green simultaneously
             const initialPhase: TrafficPhase = i % 2 === 0 ? 0 : 2;
             signalMapRef.current.set(inter.idx, {
                 idx: inter.idx,
@@ -187,8 +225,14 @@ export default function TrafficLightSystem({
                 phaseBQueueCount: 0,
             });
         });
-    }, [intersections, signalMapRef]);
+        initializedRef.current = true;
+    }
 
+    /**
+     * Runs BEFORE CarSystem (earlier position in the JSX tree).
+     * Reads last frame's queue counts to adapt durations, then resets them
+     * so CarSystem can fill them fresh this frame.
+     */
     useFrame((_, delta) => {
         for (const signal of signalMapRef.current.values()) {
             const phaseDuration =
@@ -202,6 +246,7 @@ export default function TrafficLightSystem({
                 signal.phaseTimer = 0;
                 const next = ((signal.currentPhase + 1) % 4) as TrafficPhase;
 
+                // Adapt duration of the phase that is about to go green
                 if (next === 0) {
                     signal.phaseADuration = adaptGreenDuration(signal.phaseAQueueCount);
                 } else if (next === 2) {
@@ -211,6 +256,7 @@ export default function TrafficLightSystem({
                 signal.currentPhase = next;
             }
 
+            // Reset queue counts so CarSystem writes fresh values this frame
             signal.phaseAQueueCount = 0;
             signal.phaseBQueueCount = 0;
         }
@@ -242,8 +288,18 @@ interface PoleProps {
 
 const POLE_H = 5 * METER;
 const LIGHT_R = 0.5 * METER;
-const CORNER = 3 * METER;
+const CORNER = 3 * METER; // offset from intersection centre to pole base
 
+/**
+ * One traffic-light pole per intersection.
+ *
+ * The pole shows the signal state for phase-A traffic:
+ *   Green  → phase 0 (A has right of way)
+ *   Yellow → phase 1 or 3 (transition)
+ *   Red    → phase 2 (B has right of way)
+ *
+ * Material emissive intensity is mutated in useFrame (no React re-renders).
+ */
 function TrafficLightPole({ intersectionIdx, position, signalMapRef }: PoleProps) {
     const redMatRef = useRef<THREE.MeshStandardMaterial>(null!);
     const yellowMatRef = useRef<THREE.MeshStandardMaterial>(null!);
@@ -262,16 +318,19 @@ function TrafficLightPole({ intersectionIdx, position, signalMapRef }: PoleProps
         greenMatRef.current.emissiveIntensity = showGreen ? 4 : 0.08;
     });
 
+    // Place pole at the NE corner of the intersection
     const px = position.x + CORNER;
     const pz = position.z + CORNER;
 
     return (
         <group position={[px, 0, pz]}>
+            {/* Vertical pole */}
             <mesh position={[0, POLE_H / 2, 0]}>
                 <cylinderGeometry args={[0.12 * METER, 0.12 * METER, POLE_H, 6]} />
                 <meshStandardMaterial color="#4b5563" metalness={0.8} roughness={0.4} />
             </mesh>
 
+            {/* Signal head housing */}
             <mesh position={[0, POLE_H + LIGHT_R * 3.2, 0]}>
                 <boxGeometry
                     args={[LIGHT_R * 1.4, LIGHT_R * 7, LIGHT_R * 1.0]}
@@ -279,6 +338,7 @@ function TrafficLightPole({ intersectionIdx, position, signalMapRef }: PoleProps
                 <meshStandardMaterial color="#1a1a1a" roughness={0.9} />
             </mesh>
 
+            {/* Red light (top) */}
             <mesh position={[0, POLE_H + LIGHT_R * 5.5, 0]}>
                 <sphereGeometry args={[LIGHT_R * 0.42, 10, 10]} />
                 <meshStandardMaterial
@@ -290,6 +350,7 @@ function TrafficLightPole({ intersectionIdx, position, signalMapRef }: PoleProps
                 />
             </mesh>
 
+            {/* Yellow light (middle) */}
             <mesh position={[0, POLE_H + LIGHT_R * 3.2, 0]}>
                 <sphereGeometry args={[LIGHT_R * 0.42, 10, 10]} />
                 <meshStandardMaterial
@@ -301,6 +362,7 @@ function TrafficLightPole({ intersectionIdx, position, signalMapRef }: PoleProps
                 />
             </mesh>
 
+            {/* Green light (bottom) */}
             <mesh position={[0, POLE_H + LIGHT_R * 0.9, 0]}>
                 <sphereGeometry args={[LIGHT_R * 0.42, 10, 10]} />
                 <meshStandardMaterial

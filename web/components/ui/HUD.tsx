@@ -1,6 +1,8 @@
 "use client";
 
-import { Navigation, MessageSquare, Loader2 } from "lucide-react";
+import { Navigation, MessageSquare, Loader2, User } from "lucide-react";
+import Link from "next/link";
+import { useAuth } from "@/contexts/AuthContext";
 
 interface HUDProps {
     hour: number;
@@ -11,6 +13,8 @@ interface HUDProps {
 }
 
 export default function HUD({ toggleChat, isLoading, retryAttempt = 0 }: HUDProps) {
+    const { user } = useAuth();
+
     return (
         <div className="fixed inset-x-0 top-0 pointer-events-none p-4 z-50">
             <div className="flex flex-col md:flex-row justify-between items-start gap-4">
@@ -36,9 +40,22 @@ export default function HUD({ toggleChat, isLoading, retryAttempt = 0 }: HUDProp
                     </div>
                 </div>
 
-                {/* Mobile FAB Chat - Only on small screens it might need different placement, 
-                    but let's keep it top right for consistency with existing code unless asked. */}
-                <div className="flex flex-col gap-2 pointer-events-auto items-end">
+                <div className="flex items-center gap-2 pointer-events-auto">
+                    {/* Auth / Dashboard Link */}
+                    <Link
+                        href={user ? "/dashboard" : "/auth"}
+                        className="btn btn-ghost bg-base-300/80 backdrop-blur-md border-white/10 rounded-full shadow-lg hover:scale-105 transition-transform flex items-center gap-2 px-4"
+                        title={user ? `Espace ${user.role_display}` : "Connexion"}
+                    >
+                        <User size={18} className="text-slate-300" />
+                        {user && (
+                            <span className="text-xs font-bold text-white max-w-[80px] truncate hidden sm:block">
+                                {user.username}
+                            </span>
+                        )}
+                    </Link>
+
+                    {/* Chat Toggle */}
                     <button
                         onClick={toggleChat}
                         className="btn btn-primary btn-circle shadow-lg hover:scale-110 transition-transform"

@@ -14,7 +14,7 @@ import {
   useEffect,
   useCallback,
   useMemo,
-  useRef
+  useRef,
 } from "react";
 import * as THREE from "three";
 import { 
@@ -27,9 +27,10 @@ import {
 import RoadNetwork from "./RoadNetwork";
 import CarSystem, { TrafficMetrics } from "../simulation/CarSystem";
 import TrafficLightSystem from "./TrafficLightSystem";
-import type { AccidentEvent } from "../simulation/accidentTypes";
+import type { AccidentEvent, AccidentHotspot } from "../simulation/accidentTypes";
 import type { TrafficSignalMap } from "../simulation/trafficLightTypes";
 import AccidentMarkers from "./AccidentMarkers";
+import * as CONFIG from "../simulation/config";
 import {
   useOsmRoads,
   useOsmBuildings,
@@ -39,7 +40,6 @@ import {
   LatLng,
   INITIAL_CENTER
 } from "./geo";
-import * as CONFIG from "../simulation/config";
 import axios from "axios";
 
 const API_BASE = "http://localhost:8000/api";
@@ -146,15 +146,27 @@ function WorldContent({ hour, onRoadInfo, onLoadingChange, onMetrics, onAccident
   const { buildings, loading: bldgLoading } = useOsmBuildings(center);
   const [trafficData, setTrafficData] = useState<Record<number, number>>({});
   const [jammedRoads, setJammedRoads] = useState<Record<string, { fwd: boolean, bwd: boolean }>>({});
-
   const loading = roadsLoading && bldgLoading;
 
-  /** Shared mutable signal state – written by TrafficLightSystem, read by CarSystem. */
   const signalMapRef = useRef<TrafficSignalMap>(new Map());
+  const [hotspots, setHotspots] = useState<AccidentHotspot[]>([]);
 
   useEffect(() => {
     onLoadingChange?.(loading);
   }, [loading, onLoadingChange]);
+
+  // Fetch hotspots on mount then refresh every 30 s so the map stays current.
+  useEffect(() => {
+    const fetchHotspots = () => {
+      axios
+        .get(`${API_BASE}/accidents/`)
+        .then((res) => setHotspots(res.data))
+        .catch(() => {});
+    };
+    fetchHotspots();
+    const id = setInterval(fetchHotspots, 30_000);
+    return () => clearInterval(id);
+  }, []);
 
   useEffect(() => {
     axios
@@ -165,7 +177,7 @@ function WorldContent({ hour, onRoadInfo, onLoadingChange, onMetrics, onAccident
         setTrafficData(map);
       })
       .catch(() => {});
-  }, [hour, center]); // Re-fetch on center change
+  }, [hour]);
 
   const handleRoadClick = useCallback(
     (road: OsmRoad, density: number) => {
@@ -228,21 +240,21 @@ function WorldContent({ hour, onRoadInfo, onLoadingChange, onMetrics, onAccident
           runs first and advances phase timers before CarSystem reads them. */}
       {!roadsLoading && roads.length > 0 && (
         <>
-          <TrafficLightSystem roads={roads} signalMapRef={signalMapRef} center={center} />
+          <TrafficLightSystem roads={roads} center={center} signalMapRef={signalMapRef} />
           <CarSystem
             roads={roads}
             hour={hour}
             onMetrics={handleMetrics}
+            center={center}
             onAccident={onAccident}
             signalMapRef={signalMapRef}
-            center={center}
+            hotspots={hotspots}
           />
         </>
       )}
 
       {/* Accident visual markers */}
-      <AccidentMarkers accidents={accidents} />
-
+      <AccidentMarkers accidents={accidents} hotspots={hotspots} />
       <OrbitControls makeDefault />
       <GizmoHelper alignment="bottom-right" margin={[80, 80]}>
         <GizmoViewport axisColors={["#ef4444", "#22c55e", "#3b82f6"]} labelColor="white" />
