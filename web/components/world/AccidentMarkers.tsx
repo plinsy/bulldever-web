@@ -1,6 +1,6 @@
 "use client";
 
-import { useRef } from "react";
+import { useRef, useState } from "react";
 import { Html } from "@react-three/drei";
 import { useFrame } from "@react-three/fiber";
 import * as THREE from "three";
@@ -25,6 +25,7 @@ export default function AccidentMarkers({ accidents }: AccidentMarkersProps) {
 
 function AccidentPin({ accident }: { accident: AccidentEvent }) {
     const lightRef = useRef<THREE.PointLight>(null!);
+    const [showInfo, setShowInfo] = useState(false);
     const { x, y, z } = accident.position;
 
     useFrame(({ clock }) => {
@@ -38,39 +39,61 @@ function AccidentPin({ accident }: { accident: AccidentEvent }) {
     const borderColor = accident.bodily ? "#ef4444" : "#f97316";
 
     return (
-        <group position={[x, y + 0.5, z]}>
+        <group
+            position={[x, y + 0.5, z]}
+            onClick={(e) => { e.stopPropagation(); setShowInfo((v) => !v); }}
+        >
             {/* Pulsing red point light for 3-D glow effect */}
             <pointLight ref={lightRef} color="#ef4444" intensity={3} distance={30} />
 
-            {/* Vertical warning pole */}
+            {/* Vertical warning pole (clickable) */}
             <mesh position={[0, 4, 0]}>
                 <cylinderGeometry args={[0.15, 0.15, 8, 8]} />
                 <meshStandardMaterial color="#ef4444" emissive="#ef4444" emissiveIntensity={1} />
             </mesh>
 
-            {/* Floating HTML label */}
-            <Html position={[0, 9, 0]} center distanceFactor={80}>
-                <div
-                    style={{
-                        background: "rgba(0,0,0,0.88)",
-                        border: `2px solid ${borderColor}`,
-                        borderRadius: 8,
-                        padding: "6px 10px",
-                        color: "white",
-                        fontWeight: "bold",
-                        fontSize: 13,
-                        whiteSpace: "nowrap",
-                        pointerEvents: "none",
-                        boxShadow: `0 0 12px ${borderColor}`,
-                        backdropFilter: "blur(6px)",
-                    }}
-                >
-                    {label}
-                    <div style={{ fontWeight: "normal", fontSize: 11, color: "#cbd5e1", marginTop: 2 }}>
-                        {accident.plates.join(" · ")}
+            {/* Floating HTML label — only shown when clicked */}
+            {showInfo && (
+                <Html position={[0, 9, 0]} center distanceFactor={80}>
+                    <div
+                        style={{
+                            background: "rgba(0,0,0,0.88)",
+                            border: `2px solid ${borderColor}`,
+                            borderRadius: 8,
+                            padding: "6px 10px",
+                            color: "white",
+                            fontWeight: "bold",
+                            fontSize: 13,
+                            whiteSpace: "nowrap",
+                            pointerEvents: "auto",
+                            boxShadow: `0 0 12px ${borderColor}`,
+                            backdropFilter: "blur(6px)",
+                        }}
+                    >
+                        {label}
+                        <div style={{ fontWeight: "normal", fontSize: 11, color: "#cbd5e1", marginTop: 2 }}>
+                            {accident.plates.join(" · ")}
+                        </div>
+                        <button
+                            onClick={(e) => { e.stopPropagation(); setShowInfo(false); }}
+                            style={{
+                                display: "block",
+                                marginTop: 4,
+                                marginLeft: "auto",
+                                background: "none",
+                                border: "none",
+                                color: "#94a3b8",
+                                cursor: "pointer",
+                                fontSize: 11,
+                                padding: 0,
+                            }}
+                            aria-label="Fermer"
+                        >
+                            ✕
+                        </button>
                     </div>
-                </div>
-            </Html>
+                </Html>
+            )}
         </group>
     );
 }
