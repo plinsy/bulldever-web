@@ -19,6 +19,8 @@ import {
 import * as THREE from "three";
 import RoadNetwork from "./RoadNetwork";
 import CarSystem, { TrafficMetrics } from "../simulation/CarSystem";
+import type { AccidentEvent } from "../simulation/accidentTypes";
+import AccidentMarkers from "./AccidentMarkers";
 import * as CONFIG from "../simulation/config";
 import {
   useOsmRoads,
@@ -154,9 +156,11 @@ interface SceneProps {
   onRoadInfo: (info: string) => void;
   onLoadingChange?: (loading: boolean) => void;
   onMetrics?: (metrics: TrafficMetrics) => void;
+  onAccident?: (event: AccidentEvent) => void;
+  accidents?: AccidentEvent[];
 }
 
-function WorldContent({ hour, onRoadInfo, onLoadingChange, onMetrics }: SceneProps) {
+function WorldContent({ hour, onRoadInfo, onLoadingChange, onMetrics, onAccident, accidents = [] }: SceneProps) {
   const { roads, loading: roadsLoading } = useOsmRoads();
   const { buildings, loading: bldgLoading } = useOsmBuildings();
   // Combined loading state for HUD spinner
@@ -285,8 +289,11 @@ function WorldContent({ hour, onRoadInfo, onLoadingChange, onMetrics }: ScenePro
 
       {/* Vehicles — only once roads are ready */}
       {!roadsLoading && roads.length > 0 && (
-        <CarSystem roads={roads} hour={hour} onMetrics={onMetrics} />
+        <CarSystem roads={roads} hour={hour} onMetrics={onMetrics} onAccident={onAccident} />
       )}
+
+      {/* Accident visual markers */}
+      <AccidentMarkers accidents={accidents} />
 
       {/* Helper */}
       <GizmoHelper alignment="bottom-right" margin={[80, 80]}>
@@ -300,7 +307,9 @@ export default function Scene({
   hour,
   onRoadInfo,
   onLoadingChange,
-  onMetrics
+  onMetrics,
+  onAccident,
+  accidents,
 }: SceneProps) {
   return (
     <div className="w-full h-full">
@@ -326,6 +335,8 @@ export default function Scene({
             onRoadInfo={onRoadInfo}
             onLoadingChange={onLoadingChange}
             onMetrics={onMetrics}
+            onAccident={onAccident}
+            accidents={accidents}
           />
         </Suspense>
       </Canvas>
