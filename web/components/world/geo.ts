@@ -90,7 +90,8 @@ export async function fetchOsmRoads(center: LatLng): Promise<OsmRoad[]> {
     const res = await fetchWithTimeout(OVERPASS_URL, {
         method: "POST",
         body: "data=" + encodeURIComponent(buildRoadQuery(center)),
-    }, 12000);
+    }, 45000);
+    if (res.status === 429) throw new Error("Overpass API: Too many requests");
     const json = await res.json();
 
     const nodes: Record<number, LatLng> = {};
@@ -126,7 +127,8 @@ export async function fetchOsmBuildings(center: LatLng): Promise<OsmBuilding[]> 
     const res = await fetchWithTimeout(OVERPASS_URL, {
         method: "POST",
         body: "data=" + encodeURIComponent(buildBuildingQuery(center)),
-    }, 15000);
+    }, 45000);
+    if (res.status === 429) throw new Error("Overpass API: Too many requests");
     const json = await res.json();
 
     const nodes: Record<number, LatLng> = {};
