@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useEffect } from "react";
-import { Car, StopCircle, GitFork, Gauge } from "lucide-react";
+import { Car, StopCircle, GitFork, Gauge, AlertTriangle } from "lucide-react";
 import type { TrafficMetrics } from "@/components/simulation/CarSystem";
 
 const API_BASE = "http://localhost:8000/api";
@@ -10,29 +10,10 @@ interface TrafficStatsPanelProps {
     metrics: TrafficMetrics | null;
 }
 
-interface StatRowProps {
-    icon: React.ReactNode;
-    label: string;
-    value: string | number;
-    sub?: string;
-    accent?: string;
-}
-
-function StatRow({ icon, label, value, sub, accent = "text-blue-400" }: StatRowProps) {
-    return (
-        <div className="flex items-center gap-3 py-1.5">
-            <span className={`shrink-0 ${accent}`}>{icon}</span>
-            <span className="text-slate-400 text-xs flex-1">{label}</span>
-            <span className="text-white font-mono text-sm font-semibold">{value}</span>
-            {sub && <span className="text-slate-500 text-xs">{sub}</span>}
-        </div>
-    );
-}
-
-function zoneStatusDot(stoppedPct: number): { dot: string; label: string; bar: string } {
-    if (stoppedPct > 40) return { dot: "bg-red-500",    label: "Saturé",  bar: "bg-red-500" };
-    if (stoppedPct > 20) return { dot: "bg-orange-400", label: "Ralenti", bar: "bg-orange-400" };
-    return                       { dot: "bg-green-500", label: "Fluide",  bar: "bg-green-500" };
+function zoneStatusClass(stoppedPct: number): string {
+    if (stoppedPct > 40) return "badge-error";
+    if (stoppedPct > 20) return "badge-warning";
+    return "badge-success";
 }
 
 const STATIC_ZONES = [
@@ -53,138 +34,101 @@ export default function TrafficStatsPanel({ metrics }: TrafficStatsPanelProps) {
         const fetchPredictions = async () => {
             try {
                 const res = await fetch(`${API_BASE}/predict-congestion/`);
-                if (!res.ok) {
-                    console.warn(`Prediction API returned status ${res.status}`);
-                    return;
-                }
-                const contentType = res.headers.get("content-type");
-                if (!contentType || !contentType.includes("application/json")) {
-                    console.warn("Prediction API did not return JSON");
-                    return;
-                }
+                if (!res.ok) return;
                 const data = await res.json();
-                if (data.status === "ok") {
-                    setAlerts(data.alerts || []);
-                }
-            } catch (err) {
-                console.error("Failed to fetch predictions", err);
-            }
+                if (data.status === "ok") setAlerts(data.alerts || []);
+            } catch {}
         };
-
-        const interval = setInterval(fetchPredictions, 10000); // 10s
+        const interval = setInterval(fetchPredictions, 10000);
         fetchPredictions();
         return () => clearInterval(interval);
     }, []);
 
     if (!metrics) return null;
 
-    const stoppedPct =
-        metrics.totalCars > 0
-            ? Math.round((metrics.stoppedCars / metrics.totalCars) * 100)
-            : 0;
-
-    const congestionColor =
-        stoppedPct > 40 ? "text-red-400" : stoppedPct > 20 ? "text-orange-400" : "text-green-400";
+    const stoppedPct = metrics.totalCars > 0 ? Math.round((metrics.stoppedCars / metrics.totalCars) * 100) : 0;
+    const congestionStatus = stoppedPct > 40 ? "text-error" : stoppedPct > 20 ? "text-warning" : "text-success";
 
     const zoneRows = STATIC_ZONES.map((zone) => {
         const stat = metrics.zoneStats[zone.id] ?? { total: 0, stopped: 0 };
         const pct = stat.total > 0 ? Math.round((stat.stopped / stat.total) * 100) : 0;
-        const status = zoneStatusDot(pct);
-        return { zone, stat, pct, status };
-    }).filter(row => row.stat.total > 0); // Only show zones with active traffic in current tile
-
-    zoneRows.sort((a, b) => b.pct - a.pct || b.stat.total - a.stat.total);
-
-    const topIntersections = Object.entries(metrics.intersectionCounts)
-        .sort(([, a], [, b]) => b - a)
-        .slice(0, 3);
+        return { zone, stat, pct };
+    }).filter(row => row.stat.total > 0).sort((a, b) => b.pct - a.pct);
 
     return (
-        <div className="bg-slate-950/85 backdrop-blur-lg border border-slate-700/60 rounded-2xl shadow-2xl p-4 w-[260px] max-h-[85vh] overflow-y-auto">
-            <p className="text-slate-300 text-xs font-semibold uppercase tracking-wider mb-2">
-                Métriques temps réel
-            </p>
+        <div className="flex flex-col gap-4 max-w-[320px] pointer-events-auto">
+            {/* Main Stats Grid */}
+            <div className="stats stats-vertical bg-base-300/80 backdrop-blur-md border border-white/10 shadow-2xl overflow-hidden rounded-2xl">
+                <div className="stat py-3">
+                    <div className="stat-figure text-primary">
+                        <Car size={24} />
+                    </div>
+                    <div className="stat-title text-[10px] uppercase font-bold tracking-widest opacity-60">Actifs</div>
+                    <div className="stat-value text-2xl text-white">{metrics.totalCars}</div>
+                </div>
 
-            <StatRow icon={<Car size={15} />}        label="Véhicules actifs" value={metrics.totalCars} />
-            <StatRow
-                icon={<StopCircle size={15} />}
-                label="À l'arrêt"
-                value={`${metrics.stoppedCars} (${stoppedPct}%)`}
-                accent={congestionColor}
-            />
-            <StatRow icon={<GitFork size={15} />}    label="En intersection"  value={metrics.carsInIntersections} accent="text-yellow-400" />
-            <StatRow icon={<Gauge size={15} />}      label="Vitesse moy."     value={metrics.avgSpeedKmh} sub="km/h" accent="text-purple-400" />
+                <div className="stat py-3">
+                    <div className="stat-figure text-secondary">
+                        <StopCircle size={24} className={congestionStatus} />
+                    </div>
+                    <div className="stat-title text-[10px] uppercase font-bold tracking-widest opacity-60">À l'arrêt</div>
+                    <div className="stat-value text-2xl text-white">
+                        {metrics.stoppedCars}
+                        <span className={`text-xs ml-2 font-bold ${congestionStatus}`}>{stoppedPct}%</span>
+                    </div>
+                </div>
 
-            {/* Alerts section */}
+                <div className="stat py-3">
+                    <div className="stat-figure text-accent">
+                        <Gauge size={24} />
+                    </div>
+                    <div className="stat-title text-[10px] uppercase font-bold tracking-widest opacity-60">Vitesse Moy.</div>
+                    <div className="stat-value text-2xl text-white">{metrics.avgSpeedKmh} <span className="text-xs opacity-50">km/h</span></div>
+                </div>
+            </div>
+
+            {/* AI Alerts */}
             {alerts.length > 0 && (
-                <>
-                    <p className="text-red-400 text-xs mt-3 mb-2 uppercase tracking-wider font-bold animate-pulse">
-                        ⚠️ Alertes & Prévisions
-                    </p>
-                    <div className="space-y-1.5 mb-3">
-                        {alerts.map((alert, idx) => (
-                            <div key={idx} className={`text-[10px] p-2 rounded border ${
-                                alert.level === 'danger' ? 'bg-red-500/20 border-red-500/40 text-red-200' : 'bg-orange-500/20 border-orange-500/40 text-orange-200'
-                            }`}>
-                                {alert.message}
-                            </div>
-                        ))}
-                    </div>
-                </>
-            )}
-
-            {/* Per-zone breakdown */}
-            {zoneRows.length > 0 && (
-                <>
-                    <p className="text-slate-500 text-xs mt-3 mb-2 uppercase tracking-wider">
-                        État par zone
-                    </p>
-                    <div className="space-y-1.5">
-                        {zoneRows.map(({ zone, stat, pct, status }) => (
-                            <div key={zone.id} className="rounded-lg bg-slate-900/60 border border-slate-700/40 px-3 py-2">
-                                <div className="flex items-center gap-2 mb-1">
-                                    <span className={`w-2 h-2 rounded-full shrink-0 ${status.dot}`} />
-                                    <span className="text-white text-xs font-medium flex-1">{zone.label}</span>
-                                    <span className={`text-xs font-semibold ${
-                                        pct > 40 ? "text-red-400" : pct > 20 ? "text-orange-400" : "text-green-400"
-                                    }`}>
-                                        {status.label}
-                                    </span>
-                                </div>
-                                <div className="flex gap-3 text-xs text-slate-400 pl-4">
-                                    <span><span className="text-white font-mono">{stat.total}</span> véh.</span>
-                                    <span><span className="text-red-400 font-mono">{stat.stopped}</span> arrêtés</span>
-                                    {stat.total > 0 && (
-                                        <span className="ml-auto text-slate-500">{pct}%</span>
-                                    )}
-                                </div>
-                                {/* Congestion bar */}
-                                <div className="mt-1.5 pl-4">
-                                    <div className="h-1 w-full bg-slate-700 rounded-full overflow-hidden">
-                                        <div
-                                            className={`h-full rounded-full transition-all duration-500 ${status.bar}`}
-                                            style={{ width: `${pct}%` }}
-                                        />
-                                    </div>
-                                </div>
-                            </div>
-                        ))}
-                    </div>
-                </>
-            )}
-
-            {topIntersections.length > 0 && (
-                <>
-                    <p className="text-slate-500 text-xs mt-3 mb-1 uppercase tracking-wider">
-                        Intersections saturées
-                    </p>
-                    {topIntersections.map(([id, count]) => (
-                        <div key={id} className="flex justify-between text-xs py-0.5">
-                            <span className="text-slate-400">Intersection #{id}</span>
-                            <span className="text-white font-mono">{count} véh.</span>
+                <div className="flex flex-col gap-2">
+                    {alerts.map((alert, idx) => (
+                        <div key={idx} className={`alert shadow-lg py-2 text-xs border-0 ${
+                            alert.level === 'danger' ? 'alert-error bg-error/20' : 'alert-warning bg-warning/20'
+                        }`}>
+                            <AlertTriangle size={14} />
+                            <span>{alert.message}</span>
                         </div>
                     ))}
-                </>
+                </div>
+            )}
+
+            {/* Zone Breakdown */}
+            {zoneRows.length > 0 && (
+                <div className="collapse bg-base-200/60 backdrop-blur-sm border border-white/5 rounded-2xl shadow-lg">
+                    <input type="checkbox" className="peer" defaultChecked /> 
+                    <div className="collapse-title text-[10px] uppercase font-bold tracking-widest opacity-60 flex items-center justify-between">
+                        Détails par Zone
+                        <span className="badge badge-outline badge-xs">{zoneRows.length} zones</span>
+                    </div>
+                    <div className="collapse-content px-4 pb-4">
+                        <div className="space-y-3">
+                            {zoneRows.map(({ zone, stat, pct }) => (
+                                <div key={zone.id} className="flex flex-col gap-1">
+                                    <div className="flex justify-between items-center text-xs">
+                                        <span className="font-semibold text-white/90">{zone.label}</span>
+                                        <span className={`badge badge-xs font-bold ${zoneStatusClass(pct)}`}>
+                                            {pct}%
+                                        </span>
+                                    </div>
+                                    <progress 
+                                        className={`progress w-full h-1.5 ${pct > 40 ? "progress-error" : pct > 20 ? "progress-warning" : "progress-success"}`} 
+                                        value={pct} 
+                                        max="100" 
+                                    />
+                                </div>
+                            ))}
+                        </div>
+                    </div>
+                </div>
             )}
         </div>
     );

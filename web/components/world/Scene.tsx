@@ -199,8 +199,9 @@ function WorldContent({ hour, onRoadInfo, onLoadingChange, onMetrics, onAccident
     <Suspense fallback={null}>
       <Sky sunPosition={sunPos as any} turbidity={0.1} rayleigh={0.5} />
       <Stars radius={100} depth={50} count={5000} factor={4} saturation={0} fade speed={1} />
-      <ambientLight intensity={hour < 6 || hour > 18 ? 0.2 : 0.5} />
-      <directionalLight position={sunPos as any} intensity={hour < 6 || hour > 18 ? 0.1 : 1.2} castShadow />
+      <ambientLight intensity={hour < 6 || hour > 18 ? 0.4 : 0.8} />
+      <directionalLight position={sunPos as any} intensity={hour < 6 || hour > 18 ? 0.2 : 1.5} castShadow shadow-mapSize={[2048, 2048]} />
+      <hemisphereLight intensity={0.4} groundColor="#222222" />
 
       <Ground />
       <OsmBuildings buildings={buildings} />

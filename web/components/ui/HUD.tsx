@@ -16,47 +16,51 @@ export default function HUD({ toggleChat, isLoading, retryAttempt = 0 }: HUDProp
     const { user } = useAuth();
 
     return (
-        <div className="fixed inset-0 pointer-events-none p-5 flex flex-col justify-between">
-            {/* Top Bar */}
-            <div className="flex justify-between items-start pointer-events-auto">
-                <div className="bg-slate-950/85 backdrop-blur-lg border border-slate-700/60 px-5 py-3 rounded-2xl shadow-2xl">
+        <div className="fixed inset-x-0 top-0 pointer-events-none p-4 z-50">
+            <div className="flex flex-col md:flex-row justify-between items-start gap-4">
+                {/* Brand & Loading */}
+                <div className="pointer-events-auto bg-base-300/80 backdrop-blur-md border border-white/10 p-4 rounded-2xl shadow-xl min-w-[200px]">
                     <div className="flex items-center gap-3">
-                        <Navigation size={18} className="text-blue-400" />
+                        <div className="bg-primary/20 p-2 rounded-xl">
+                            <Navigation size={20} className="text-primary" />
+                        </div>
                         <div>
-                            <h1 className="text-white font-bold text-base leading-tight tracking-tight">
-                                Jumeau Numérique · Antananarivo
+                            <h1 className="text-white font-bold text-lg leading-none tracking-tight">
+                                AlaminoAI
                             </h1>
-                            <p className="text-slate-400 text-xs">Données routières temps réel — OpenStreetMap</p>
+                            {isLoading && (
+                                <div className="flex items-center gap-2 mt-1 text-primary text-[10px] font-medium uppercase tracking-wider">
+                                    <Loader2 size={10} className="animate-spin" />
+                                    {retryAttempt > 1
+                                        ? `Retry ${retryAttempt}…`
+                                        : "Syncing OSM…"}
+                                </div>
+                            )}
                         </div>
                     </div>
-                    {isLoading && (
-                        <div className="flex items-center gap-2 mt-2 text-blue-400 text-xs">
-                            <Loader2 size={12} className="animate-spin" />
-                            {retryAttempt > 1
-                                ? `Nouvelle tentative ${retryAttempt}…`
-                                : "Chargement du réseau routier…"}
-                        </div>
-                    )}
                 </div>
 
-                <div className="flex items-center gap-2">
+                <div className="flex items-center gap-2 pointer-events-auto">
+                    {/* Auth / Dashboard Link */}
                     <Link
                         href={user ? "/dashboard" : "/auth"}
-                        className="bg-slate-800/90 hover:bg-slate-700 active:scale-95 text-white p-3 rounded-full shadow-2xl transition-all flex items-center gap-1.5"
+                        className="btn btn-ghost bg-base-300/80 backdrop-blur-md border-white/10 rounded-full shadow-lg hover:scale-105 transition-transform flex items-center gap-2 px-4"
                         title={user ? `Espace ${user.role_display}` : "Connexion"}
                     >
-                        <User size={20} />
+                        <User size={18} className="text-slate-300" />
                         {user && (
-                            <span className="text-xs font-medium pr-1 max-w-20 truncate hidden sm:block">
+                            <span className="text-xs font-bold text-white max-w-[80px] truncate hidden sm:block">
                                 {user.username}
                             </span>
                         )}
                     </Link>
+
+                    {/* Chat Toggle */}
                     <button
                         onClick={toggleChat}
-                        className="bg-blue-600 hover:bg-blue-500 active:scale-95 text-white p-3 rounded-full shadow-2xl transition-all"
+                        className="btn btn-primary btn-circle shadow-lg hover:scale-110 transition-transform"
                     >
-                        <MessageSquare size={22} />
+                        <MessageSquare size={20} />
                     </button>
                 </div>
             </div>
