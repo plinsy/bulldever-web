@@ -20,9 +20,8 @@ export default function HUD({ toggleChat, isLoading, retryAttempt = 0 }: HUDProp
                         <Navigation size={18} className="text-blue-400" />
                         <div>
                             <h1 className="text-white font-bold text-base leading-tight tracking-tight">
-                                Jumeau Numérique · Antananarivo
+                                AlaminoAI
                             </h1>
-                            <p className="text-slate-400 text-xs">Données routières temps réel — OpenStreetMap</p>
                         </div>
                     </div>
                     {isLoading && (
