@@ -16,6 +16,11 @@ from dotenv import load_dotenv
 
 load_dotenv()
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
+if GEMINI_API_KEY:
+    GEMINI_API_KEY = GEMINI_API_KEY.strip()
+    print(f"DEBUG: Final API Key: {GEMINI_API_KEY[:5]}...{GEMINI_API_KEY[-4:]} (length: {len(GEMINI_API_KEY)})")
+else:
+    print("DEBUG: GEMINI_API_KEY is NOT set!")
 
 class TrafficDataView(APIView):
     def get(self, request):
@@ -69,32 +74,102 @@ class PathfindingView(APIView):
             'estimated_time': 15 # mins
         })
 
+# --- AI TOOLS DEFINITIONS ---
+
+def get_traffic_stats(zone_id: str = None):
+    """
+    Récupère les statistiques de trafic en temps réel pour une zone spécifique ou pour toute la ville.
+    Zones valides : analakely, anosizato, isotry, 67ha, ambohijatovo, tsaralalana, ankorondrano, behoririka.
+    """
+    latest = TrafficSnapshot.objects.order_by('-recorded_at').first()
+    if not latest:
+        return {"error": "Aucune donnée disponible."}
+    
+    if zone_id:
+        zone_data = latest.zone_counts.get(zone_id.lower(), {"total": 0, "stopped": 0})
+        return {
+            "zone": zone_id,
+            "total_cars": zone_data.get("total", 0),
+            "stopped_cars": zone_data.get("stopped", 0),
+            "congestion_level": f"{round((zone_data.get('stopped', 0) / zone_data.get('total', 1)) * 100)}%" if zone_data.get("total", 0) > 0 else "0%"
+        }
+    
+    return {
+        "total_city_cars": latest.total_cars,
+        "total_city_stopped": latest.stopped_cars,
+        "avg_speed": latest.avg_speed_kmh,
+        "timestamp": latest.recorded_at.isoformat()
+    }
+
+def predict_zone_congestion(zone_id: str):
+    """
+    Prédit le niveau de congestion futur pour une zone donnée en analysant les tendances récentes.
+    """
+    snapshots = TrafficSnapshot.objects.order_by('-recorded_at')[:5]
+    if len(snapshots) < 2:
+        return {"prediction": "Incertain (pas assez de données)", "trend": "stable"}
+    
+    # Simple logic: is it increasing?
+    vals = []
+    for s in snapshots:
+        z = s.zone_counts.get(zone_id.lower(), {"stopped": 0})
+        vals.append(z.get("stopped", 0))
+    
+    trend = "en augmentation" if vals[0] > vals[-1] else "en diminution" if vals[0] < vals[-1] else "stable"
+    return {
+        "zone": zone_id,
+        "current_stopped": vals[0],
+        "trend": trend,
+        "prediction": "Risque élevé de bouchon" if trend == "en augmentation" and vals[0] > 5 else "Trafic fluide attendu"
+    }
+
+# --- END AI TOOLS ---
+
 class ChatbotView(APIView):
     def post(self, request):
         user_query = request.data.get('query')
-        current_traffic_context = "The traffic is heavy in Anosizato and Analakely due to peak hours (5 PM)."
         
         try:
             if not GEMINI_API_KEY:
                 return Response({
-                    'response': f"Chatbot Mock (Gemini): To avoid traffic in Anosizato at 5 PM, I recommend taking the bypass road through Itaosy. (GEMINI_API_KEY missing)"
+                    'response': "Clé API manquante. Veuillez configurer GEMINI_API_KEY."
                 })
 
             client = genai.Client(api_key=GEMINI_API_KEY)
-            model_id = "gemini-2.0-flash" # Defaulting to flash for speed
+            model_id = "gemma-4-26b-a4b-it" 
 
-            prompt = f"You are a traffic assistant for Antananarivo, Madagascar. Context: {current_traffic_context}\nUser: {user_query}"
+            system_instruction = """
+            Vous êtes AlaminoAI, l'assistant expert du Jumeau Numérique d'Antananarivo.
             
-            response = client.models.generate_content(
-                model=model_id,
-                contents=prompt,
-                config=types.GenerateContentConfig(
-                    tools=[types.Tool(google_search=types.GoogleSearch())]
+            VOS CAPACITÉS :
+            - Vous pouvez consulter les statistiques réelles via 'get_traffic_stats'.
+            - Vous pouvez prédire l'évolution via 'predict_zone_congestion'.
+            - Vous répondez en Français ou Malgache.
+            
+            CONSEILS :
+            - Si l'utilisateur demande "comment est le trafic ?", appelez 'get_traffic_stats'.
+            - Soyez précis et utilisez les chiffres retournés par vos outils.
+            """
+
+            # Automatic Function Calling configuration
+            generate_content_config = types.GenerateContentConfig(
+                system_instruction=system_instruction,
+                tools=[get_traffic_stats, predict_zone_congestion, types.Tool(google_search=types.GoogleSearch())],
+                tool_config=types.ToolConfig(
+                    include_server_side_tool_invocations=True
                 )
             )
             
+            response = client.models.generate_content(
+                model=model_id,
+                contents=user_query,
+                config=generate_content_config
+            )
+            
             return Response({'response': response.text})
+
         except Exception as e:
+            print(f"Chatbot Tool Error: {str(e)}")
             return Response({'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 

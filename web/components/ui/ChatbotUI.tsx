@@ -5,7 +5,7 @@ import { Send, X, Bot, User } from "lucide-react";
 import axios from "axios";
 import { motion, AnimatePresence } from "framer-motion";
 
-const API_BASE = "http://localhost:8000/api";
+const API_BASE = "http://127.0.0.1:8000/api";
 
 export default function ChatbotUI({ isOpen, onClose }: { isOpen: boolean, onClose: () => void }) {
     const [messages, setMessages] = useState<{role: string, text: string}[]>([
