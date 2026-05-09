@@ -96,13 +96,19 @@ export async function fetchTrafficManagement(hour?: number): Promise<TrafficMana
     return data;
 }
 
+export interface PathResult {
+    distance_km: number;
+    duration_minutes: number;
+    path: [number, number][];
+}
+
 export async function fetchBestPath(
     startLat: number,
     startLng: number,
     endLat: number,
     endLng: number
-): Promise<XPathResult> {
-    const { data } = await apiClient.get<XPathResult>("/shortest-path/", {
+): Promise<PathResult> {
+    const { data } = await apiClient.get<PathResult>("/shortest-path/", {
         params: { start_lat: startLat, start_lng: startLng, end_lat: endLat, end_lng: endLng },
     });
     return data;
