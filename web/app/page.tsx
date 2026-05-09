@@ -4,12 +4,15 @@ import { useState, useCallback } from "react";
 import Scene from "@/components/world/Scene";
 import HUD from "@/components/ui/HUD";
 import ChatbotUI from "@/components/ui/ChatbotUI";
+import TrafficStatsPanel from "@/components/ui/TrafficStatsPanel";
+import type { TrafficMetrics } from "@/components/simulation/CarSystem";
 
 export default function Home() {
     const [hour, setHour] = useState(8);
     const [isChatOpen, setIsChatOpen] = useState(false);
     const [roadInfo, setRoadInfo] = useState<string | null>(null);
     const [isLoading, setIsLoading] = useState(true);
+    const [metrics, setMetrics] = useState<TrafficMetrics | null>(null);
 
     const handleLoadingChange = useCallback((loading: boolean) => {
         setIsLoading(loading);
@@ -21,6 +24,7 @@ export default function Home() {
                 hour={hour}
                 onRoadInfo={setRoadInfo}
                 onLoadingChange={handleLoadingChange}
+                onMetrics={setMetrics}
             />
 
             {/* Road info popup */}
@@ -47,6 +51,12 @@ export default function Home() {
                 toggleChat={() => setIsChatOpen(!isChatOpen)}
                 isLoading={isLoading}
             />
+
+            {/* Real-time traffic stats panel — top-right */}
+            <div className="fixed top-5 right-16 z-40 pointer-events-none">
+                <TrafficStatsPanel metrics={metrics} />
+            </div>
+
             <ChatbotUI
                 isOpen={isChatOpen}
                 onClose={() => setIsChatOpen(false)}
