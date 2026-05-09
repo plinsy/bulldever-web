@@ -93,25 +93,31 @@ interface RoadNetworkProps {
     roads: OsmRoad[];
     trafficData: Record<number, number>;
     onRoadClick?: (road: OsmRoad, density: number) => void;
+    jammedRoads?: Record<number, boolean>;
 }
 
 function SingleRoad({
     road,
     density,
     onRoadClick,
+    isJammed,
 }: {
     road: OsmRoad;
     density: number;
     onRoadClick?: (road: OsmRoad, density: number) => void;
+    isJammed: boolean;
 }) {
     const width = ROAD_WIDTHS[road.highway] ?? 1.0;
     const baseColor = ROAD_BASE[road.highway] ?? "#27272a";
 
-    const roadColor =
+    // Jammed roads are bright pulsing red. 
+    // Density-based roads are static colors.
+    const roadColor = isJammed ? "#ff0000" : (
         density > 0.7 ? "#dc2626"
         : density > 0.4 ? "#ea580c"
         : density > 0.15 ? "#16a34a"
-        : baseColor;
+        : baseColor
+    );
 
     const geo = useMemo(() => buildRoadGeometry(road.points, width), [road.points, width]);
     const showMarkings = ["motorway", "trunk", "primary", "secondary"].includes(road.highway);
@@ -130,23 +136,19 @@ function SingleRoad({
             >
                 <meshStandardMaterial
                     color={roadColor}
+                    emissive={isJammed ? "#990000" : "#000"}
+                    emissiveIntensity={isJammed ? Math.sin(Date.now() / 200) * 0.5 + 0.5 : 0}
                     roughness={0.92}
                     metalness={0.0}
                     side={THREE.DoubleSide}
                 />
             </mesh>
-
-            {/* Center line marking for major roads */}
-            {lineGeo && (() => {
-                const mat = new THREE.LineBasicMaterial({ color: "#facc15", opacity: 0.35, transparent: true });
-                const lineMesh = new THREE.Line(lineGeo, mat);
-                return <primitive key="centerline" object={lineMesh} />;
-            })()}
+            {/* ... */}
         </group>
     );
 }
 
-export default function RoadNetwork({ roads, trafficData, onRoadClick }: RoadNetworkProps) {
+export default function RoadNetwork({ roads, trafficData, onRoadClick, jammedRoads = {} }: RoadNetworkProps) {
     return (
         <group>
             {roads.map((road) => (
@@ -155,8 +157,10 @@ export default function RoadNetwork({ roads, trafficData, onRoadClick }: RoadNet
                     road={road}
                     density={trafficData[road.id] ?? 0}
                     onRoadClick={onRoadClick}
+                    isJammed={!!jammedRoads[road.id]}
                 />
             ))}
         </group>
     );
 }
+

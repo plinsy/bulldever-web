@@ -1,8 +1,11 @@
 "use client";
 
+import { useState, useEffect } from "react";
 import { Car, StopCircle, GitFork, Gauge } from "lucide-react";
 import type { TrafficMetrics } from "@/components/simulation/CarSystem";
 import { ZONES } from "@/components/simulation/zones";
+
+const API_BASE = "http://localhost:8000/api";
 
 interface TrafficStatsPanelProps {
     metrics: TrafficMetrics | null;
@@ -34,6 +37,35 @@ function zoneStatusDot(stoppedPct: number): { dot: string; label: string; bar: s
 }
 
 export default function TrafficStatsPanel({ metrics }: TrafficStatsPanelProps) {
+    const [alerts, setAlerts] = useState<any[]>([]);
+
+    useEffect(() => {
+        const fetchPredictions = async () => {
+            try {
+                const res = await fetch(`${API_BASE}/predict-congestion/`);
+                if (!res.ok) {
+                    console.warn(`Prediction API returned status ${res.status}`);
+                    return;
+                }
+                const contentType = res.headers.get("content-type");
+                if (!contentType || !contentType.includes("application/json")) {
+                    console.warn("Prediction API did not return JSON");
+                    return;
+                }
+                const data = await res.json();
+                if (data.status === "ok") {
+                    setAlerts(data.alerts || []);
+                }
+            } catch (err) {
+                console.error("Failed to fetch predictions", err);
+            }
+        };
+
+        const interval = setInterval(fetchPredictions, 10000); // 10s
+        fetchPredictions();
+        return () => clearInterval(interval);
+    }, []);
+
     if (!metrics) return null;
 
     const stoppedPct =
@@ -44,7 +76,6 @@ export default function TrafficStatsPanel({ metrics }: TrafficStatsPanelProps) {
     const congestionColor =
         stoppedPct > 40 ? "text-red-400" : stoppedPct > 20 ? "text-orange-400" : "text-green-400";
 
-    // Build per-zone rows: show all defined zones, even those with 0 cars
     const zoneRows = ZONES.map((zone) => {
         const stat = metrics.zoneStats[zone.id] ?? { total: 0, stopped: 0 };
         const pct = stat.total > 0 ? Math.round((stat.stopped / stat.total) * 100) : 0;
@@ -52,7 +83,6 @@ export default function TrafficStatsPanel({ metrics }: TrafficStatsPanelProps) {
         return { zone, stat, pct, status };
     });
 
-    // Sort: most congested first, then by total desc
     zoneRows.sort((a, b) => b.pct - a.pct || b.stat.total - a.stat.total);
 
     const topIntersections = Object.entries(metrics.intersectionCounts)
@@ -60,7 +90,7 @@ export default function TrafficStatsPanel({ metrics }: TrafficStatsPanelProps) {
         .slice(0, 3);
 
     return (
-        <div className="bg-slate-950/85 backdrop-blur-lg border border-slate-700/60 rounded-2xl shadow-2xl p-4 w-[260px]">
+        <div className="bg-slate-950/85 backdrop-blur-lg border border-slate-700/60 rounded-2xl shadow-2xl p-4 w-[260px] max-h-[85vh] overflow-y-auto">
             <p className="text-slate-300 text-xs font-semibold uppercase tracking-wider mb-2">
                 Métriques temps réel
             </p>
@@ -74,6 +104,24 @@ export default function TrafficStatsPanel({ metrics }: TrafficStatsPanelProps) {
             />
             <StatRow icon={<GitFork size={15} />}    label="En intersection"  value={metrics.carsInIntersections} accent="text-yellow-400" />
             <StatRow icon={<Gauge size={15} />}      label="Vitesse moy."     value={metrics.avgSpeedKmh} sub="km/h" accent="text-purple-400" />
+
+            {/* Alerts section */}
+            {alerts.length > 0 && (
+                <>
+                    <p className="text-red-400 text-xs mt-3 mb-2 uppercase tracking-wider font-bold animate-pulse">
+                        ⚠️ Alertes & Prévisions
+                    </p>
+                    <div className="space-y-1.5 mb-3">
+                        {alerts.map((alert, idx) => (
+                            <div key={idx} className={`text-[10px] p-2 rounded border ${
+                                alert.level === 'danger' ? 'bg-red-500/20 border-red-500/40 text-red-200' : 'bg-orange-500/20 border-orange-500/40 text-orange-200'
+                            }`}>
+                                {alert.message}
+                            </div>
+                        ))}
+                    </div>
+                </>
+            )}
 
             {/* Per-zone breakdown */}
             <p className="text-slate-500 text-xs mt-3 mb-2 uppercase tracking-wider">

@@ -14,8 +14,8 @@ export const BUILDING_FETCH_RADIUS = 0.005;  // Latitude radius in degrees (~1.1
 export const MAX_CARS = 60;
 
 // 4. Speeds (Physical Units per frame)
-export const TRAFFIC_SPEED_MIN = 0.005;
-export const TRAFFIC_SPEED_MAX = 0.015;
+export const TRAFFIC_SPEED_MIN = 0.025;
+export const TRAFFIC_SPEED_MAX = 0.045;
 export const TURN_SPEED_MULTIPLIER = 3.0; // How fast cars move during intersection transitions
 
 // 4. Collision & Radar (in Meters)
@@ -24,7 +24,11 @@ export const SAFE_GAP = 6.0;        // Distance to stop completely
 export const SLOW_GAP = 15.0;       // Distance to start slowing down
 export const RADAR_CONE_DOT = 0.85;  // Focus of the radar (0.85 = ~30 degrees)
 
-// 5. Intersection Logic
+// 5. Congestion & Detection
+export const JAM_CAR_COUNT = 4;      // Number of stopped cars to mark a road as "Jammed" (Red)
+export const PREDICTION_INTERVAL_MS = 10000; // How often to check for predictions from backend
+
+// 6. Intersection Logic
 export const INTERSECTION_THRESH = 0.00012; // Connectivity threshold (higher = more connections)
 export const INTERSECTION_TOLERANCE = 0.06; // Progress tolerance to trigger a turn
 

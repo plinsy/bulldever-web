@@ -34,6 +34,8 @@ export interface TrafficMetrics {
     zoneStats: Record<string, ZoneStat>;
     /** car count per intersection index */
     intersectionCounts: Record<string, number>;
+    /** IDs of roads with high congestion */
+    jammedRoads: Record<number, boolean>;
 }
 
 interface CarSystemProps {
@@ -102,7 +104,9 @@ async function postSnapshot(metrics: TrafficMetrics, hour: number): Promise<void
                 stopped_cars: metrics.stoppedCars,
                 cars_in_intersections: metrics.carsInIntersections,
                 avg_speed_kmh: metrics.avgSpeedKmh,
-                zone_counts: metrics.zoneStats,
+                zone_counts: Object.fromEntries(
+                    Object.entries(metrics.zoneStats).map(([id, stat]) => [id, stat.stopped])
+                ),
                 intersection_counts: metrics.intersectionCounts,
             }),
         });
@@ -261,6 +265,7 @@ export default function CarSystem({ roads, hour, onMetrics }: CarSystemProps) {
         let speedSum = 0;
         const zoneStats: Record<string, ZoneStat> = {};
         const intersectionCounts: Record<string, number> = {};
+        const stoppedPerRoad: Record<number, number> = {};
 
         carState.forEach((car, i) => {
             if (car.isExploded) {
@@ -291,7 +296,8 @@ export default function CarSystem({ roads, hour, onMetrics }: CarSystemProps) {
                 tailLightsRef.current.setMatrixAt(i, dummy.matrix);
                 tempColor.set("#1a1a1a");
                 chassisRef.current.setColorAt(i, tempColor);
-                stopped++; // Exploded car is stopped
+                stopped++; 
+                stoppedPerRoad[car.roadIdx] = (stoppedPerRoad[car.roadIdx] || 0) + 1;
                 return;
             }
 
@@ -373,7 +379,7 @@ export default function CarSystem({ roads, hour, onMetrics }: CarSystemProps) {
             const targetLaneOffset = roadWidth > CONFIG.NARROW_ROAD_LIMIT * METER ? CONFIG.LANE_OFFSET * METER : 0;
             car.currentLaneOffset = THREE.MathUtils.lerp(car.currentLaneOffset, targetLaneOffset, CONFIG.LERP_LANE_OFFSET);
             const side = new THREE.Vector3(forward.z, 0, -forward.x).normalize().multiplyScalar(car.currentLaneOffset);
-            const yOffset = 0.02;
+            const yOffset = 0.1; // Elevated to avoid raycast fighting with road
             const targetPos = new THREE.Vector3(pos.x + side.x, yOffset, pos.z + side.z);
             const targetLookAt = new THREE.Vector3(targetPos.x + forward.x, yOffset, targetPos.z + forward.z);
 
@@ -408,7 +414,10 @@ export default function CarSystem({ roads, hour, onMetrics }: CarSystemProps) {
             const effectiveSpeed = currentSpeed * (0.2 + pf * 0.8);
             const isStopped = effectiveSpeed < STOPPED_SPEED_THRESHOLD;
             speedSum += effectiveSpeed;
-            if (isStopped) stopped++;
+            if (isStopped) {
+                stopped++;
+                stoppedPerRoad[car.roadIdx] = (stoppedPerRoad[car.roadIdx] || 0) + 1;
+            }
 
             const zoneId = classifyZone(pos.x, pos.z);
             if (zoneId !== null) {
@@ -427,6 +436,14 @@ export default function CarSystem({ roads, hour, onMetrics }: CarSystemProps) {
             });
         });
 
+        const jammedRoads: Record<string, boolean> = {};
+        Object.entries(stoppedPerRoad).forEach(([roadIdx, count]) => {
+            const idx = Number(roadIdx);
+            if (count >= CONFIG.JAM_CAR_COUNT && roads[idx]) {
+                jammedRoads[String(roads[idx].id)] = true;
+            }
+        });
+
         chassisRef.current.instanceMatrix.needsUpdate = true;
         chassisRef.current.instanceColor!.needsUpdate = true;
         cabinRef.current.instanceMatrix.needsUpdate = true;
@@ -443,8 +460,10 @@ export default function CarSystem({ roads, hour, onMetrics }: CarSystemProps) {
             avgSpeedKmh: Math.round(sceneSpeedToKmh(avgSceneSpeed) * 10) / 10,
             zoneStats,
             intersectionCounts,
+            jammedRoads,
         };
         onMetrics?.(metrics);
+
 
         const now = state.clock.getElapsedTime() * 1000;
         if (now - lastSnapshotRef.current >= SNAPSHOT_INTERVAL_MS) {
@@ -482,19 +501,19 @@ export default function CarSystem({ roads, hour, onMetrics }: CarSystemProps) {
             <instancedMesh ref={chassisRef} args={[carGeos.chassis, null as any, CONFIG.MAX_CARS]} castShadow onClick={(e) => { e.stopPropagation(); setSelectedIdx(e.instanceId!); }} onPointerMissed={() => setSelectedIdx(null)}>
                 <meshStandardMaterial roughness={0.5} metalness={0.6} />
             </instancedMesh>
-            <instancedMesh ref={cabinRef} args={[carGeos.cabin, null as any, CONFIG.MAX_CARS]} castShadow>
+            <instancedMesh ref={cabinRef} args={[carGeos.cabin, null as any, CONFIG.MAX_CARS]} castShadow raycast={() => null}>
                 <meshStandardMaterial color="#111" roughness={0.1} metalness={0.9} />
             </instancedMesh>
-            <instancedMesh ref={headLightsRef} args={[carGeos.headlights, null as any, CONFIG.MAX_CARS]}>
+            <instancedMesh ref={headLightsRef} args={[carGeos.headlights, null as any, CONFIG.MAX_CARS]} raycast={() => null}>
                 <meshStandardMaterial color="#fff" emissive="#fff" emissiveIntensity={2} />
             </instancedMesh>
-            <instancedMesh ref={tailLightsRef} args={[carGeos.taillights, null as any, CONFIG.MAX_CARS]}>
+            <instancedMesh ref={tailLightsRef} args={[carGeos.taillights, null as any, CONFIG.MAX_CARS]} raycast={() => null}>
                 <meshStandardMaterial color="#f00" emissive="#f00" emissiveIntensity={2} />
             </instancedMesh>
-            <instancedMesh ref={wheelRef} args={[carGeos.wheels, null as any, CONFIG.MAX_CARS]}>
+            <instancedMesh ref={wheelRef} args={[carGeos.wheels, null as any, CONFIG.MAX_CARS]} raycast={() => null}>
                 <meshStandardMaterial color="#050505" roughness={0.9} />
             </instancedMesh>
-            <instancedMesh ref={smokeRef} args={[new THREE.SphereGeometry(0.5, 8, 8), null as any, CONFIG.MAX_CARS * 8]}>
+            <instancedMesh ref={smokeRef} args={[new THREE.SphereGeometry(0.5, 8, 8), null as any, CONFIG.MAX_CARS * 8]} raycast={() => null}>
                 <meshStandardMaterial color="#444" transparent opacity={0.6} />
             </instancedMesh>
         </group>

@@ -14,12 +14,10 @@ import {
   useEffect,
   useCallback,
   useMemo,
-  useRef,
 } from "react";
 import * as THREE from "three";
 import RoadNetwork from "./RoadNetwork";
 import CarSystem, { TrafficMetrics } from "../simulation/CarSystem";
-import * as CONFIG from "../simulation/config";
 import {
   useOsmRoads,
   useOsmBuildings,
@@ -27,6 +25,7 @@ import {
   OsmBuilding,
   METER,
 } from "./geo";
+import * as CONFIG from "../simulation/config";
 import axios from "axios";
 
 const API_BASE = "http://localhost:8000/api";
@@ -159,13 +158,15 @@ interface SceneProps {
 function WorldContent({ hour, onRoadInfo, onLoadingChange, onMetrics }: SceneProps) {
   const { roads, loading: roadsLoading } = useOsmRoads();
   const { buildings, loading: bldgLoading } = useOsmBuildings();
+  const [trafficData, setTrafficData] = useState<Record<number, number>>({});
+  const [jammedRoads, setJammedRoads] = useState<Record<number, boolean>>({});
+
   // Combined loading state for HUD spinner
   const loading = roadsLoading && bldgLoading;
 
   useEffect(() => {
     onLoadingChange?.(loading);
   }, [loading, onLoadingChange]);
-  const [trafficData, setTrafficData] = useState<Record<number, number>>({});
 
   useEffect(() => {
     axios
@@ -189,6 +190,11 @@ function WorldContent({ hour, onRoadInfo, onLoadingChange, onMetrics }: ScenePro
     },
     [onRoadInfo],
   );
+
+  const handleMetrics = useCallback((m: TrafficMetrics) => {
+    setJammedRoads(m.jammedRoads || {});
+    onMetrics?.(m);
+  }, [onMetrics]);
 
   // Sun position based on hour
   const sunAngle = ((hour - 6) / 12) * Math.PI;
@@ -232,7 +238,6 @@ function WorldContent({ hour, onRoadInfo, onLoadingChange, onMetrics }: ScenePro
         shadow-bias={-0.001}
         color="#fffaed"
       />
-      {/* Fill light from the opposite side */}
       <directionalLight
         position={[-50, 30, 50]}
         intensity={0.3}
@@ -243,7 +248,7 @@ function WorldContent({ hour, onRoadInfo, onLoadingChange, onMetrics }: ScenePro
       <Ground />
       <OsmBuildings buildings={buildings} />
 
-      {/* Loading indicator: spinning sphere when waiting for OSM data */}
+      {/* Loading indicator */}
       {loading && (
         <mesh position={[0, 5, 0]}>
           <sphereGeometry args={[1]} />
@@ -255,12 +260,13 @@ function WorldContent({ hour, onRoadInfo, onLoadingChange, onMetrics }: ScenePro
         </mesh>
       )}
 
-      {/* Real OSM roads — show as soon as roads data arrives */}
+      {/* Real OSM roads */}
       {!roadsLoading && (
         <RoadNetwork
           roads={roads}
           trafficData={trafficData}
           onRoadClick={handleRoadClick}
+          jammedRoads={jammedRoads}
         />
       )}
 
@@ -283,9 +289,9 @@ function WorldContent({ hour, onRoadInfo, onLoadingChange, onMetrics }: ScenePro
           />
         ))}
 
-      {/* Vehicles — only once roads are ready */}
+      {/* Vehicles */}
       {!roadsLoading && roads.length > 0 && (
-        <CarSystem roads={roads} hour={hour} onMetrics={onMetrics} />
+        <CarSystem roads={roads} hour={hour} onMetrics={handleMetrics} />
       )}
 
       {/* Helper */}
