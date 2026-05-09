@@ -8,6 +8,10 @@ import { classifyZone } from "./zones";
 import { useFrame } from "@react-three/fiber";
 import { Html } from "@react-three/drei";
 import * as CONFIG from "./config";
+import type { AccidentEvent, AccidentHotspot } from "./accidentTypes";
+import type { TrafficSignalMap } from "./trafficLightTypes";
+
+export type { AccidentEvent };
 
 const METER = CONFIG.METER;
 const CAR_COLORS = CONFIG.CAR_COLORS.map(c => new THREE.Color(c));
@@ -44,6 +48,22 @@ interface CarSystemProps {
     /** Called every frame with updated metrics */
     onMetrics?: (metrics: TrafficMetrics) => void;
     center: LatLng;
+    /** Called once per detected collision with the accident details */
+    onAccident?: (event: AccidentEvent) => void;
+    /** Shared signal map written by TrafficLightSystem; read here to stop cars at red lights. */
+    signalMapRef?: React.MutableRefObject<TrafficSignalMap>;
+    /** Danger zones fetched from the backend; cars slow down near them. */
+    hotspots?: AccidentHotspot[];
+}
+
+/** Generate a Madagascar-style license plate: "AB 1234" or "TAM 5678" */
+function generatePlate(): string {
+    const chars = "ABCDEFGHJKLMNPRSTUVWXY";
+    const len = Math.random() > 0.5 ? 2 : 3;
+    let prefix = "";
+    for (let i = 0; i < len; i++) prefix += chars[Math.floor(Math.random() * chars.length)];
+    const digits = String(Math.floor(Math.random() * 9000) + 1000);
+    return `${prefix} ${digits}`;
 }
 
 function roadXZ(road: OsmRoad, center: LatLng) {
@@ -94,6 +114,18 @@ function sceneSpeedToKmh(sceneUnitsPerFrame: number, fps = 60): number {
     return metersPerSecond * 3.6;
 }
 
+async function postAccident(x: number, z: number, bodily: boolean): Promise<void> {
+    try {
+        await fetch(`${API_BASE}/accidents/`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ scene_x: x, scene_z: z, bodily }),
+        });
+    } catch {
+        // Network errors are non-fatal; simulation continues
+    }
+}
+
 async function postSnapshot(metrics: TrafficMetrics, hour: number): Promise<void> {
     try {
         await fetch(`${API_BASE}/traffic-stats/`, {
@@ -116,7 +148,7 @@ async function postSnapshot(metrics: TrafficMetrics, hour: number): Promise<void
     }
 }
 
-export default function CarSystem({ roads, hour, onMetrics, center }: CarSystemProps) {
+export default function CarSystem({ roads, hour, onMetrics, center, onAccident, signalMapRef, hotspots = [] }: CarSystemProps) {
     const chassisRef = useRef<THREE.InstancedMesh>(null!);
     const cabinRef = useRef<THREE.InstancedMesh>(null!);
     const headLightsRef = useRef<THREE.InstancedMesh>(null!);
@@ -126,6 +158,8 @@ export default function CarSystem({ roads, hour, onMetrics, center }: CarSystemP
 
     const lastSnapshotRef = useRef<number>(0);
     const [selectedIdx, setSelectedIdx] = useState<number | null>(null);
+    const collidedPairsRef = useRef<Set<string>>(new Set());
+    const frameCountRef = useRef<number>(0);
 
     const intersections = useMemo(() => deriveIntersections(roads, center), [roads, center]);
 
@@ -218,7 +252,8 @@ export default function CarSystem({ roads, hour, onMetrics, center }: CarSystemP
                     speed: 0.02 + Math.random() * 0.03,
                     delay: Math.random() * 2
                 })),
-                currentActualSpeed: 0
+                currentActualSpeed: 0,
+                plate: generatePlate(),
             };
         });
     }, [roads]);
@@ -343,6 +378,69 @@ export default function CarSystem({ roads, hour, onMetrics, center }: CarSystemP
                 currentSpeed *= 0.3;
             }
 
+            // ── Traffic light check ──────────────────────────────────────
+            if (currentSpeed > 0 && signalMapRef?.current) {
+                const curveT = Math.max(0, Math.min(1, car.progress));
+                const fwd = curve.getTangentAt(curveT);
+                if (car.direction === -1) fwd.negate();
+
+                const approachDist = CONFIG.TRAFFIC_LIGHT_APPROACH * METER;
+                const stopDist = CONFIG.TRAFFIC_LIGHT_STOP * METER;
+                const innerDist = CONFIG.TRAFFIC_LIGHT_INNER * METER;
+                const queueDist = CONFIG.TRAFFIC_LIGHT_QUEUE_ZONE * METER;
+
+                for (const signal of signalMapRef.current.values()) {
+                    const dx = signal.position.x - car.currentPos.x;
+                    const dz = signal.position.z - car.currentPos.z;
+                    const distSq = dx * dx + dz * dz;
+                    if (distSq > approachDist * approachDist) continue;
+
+                    const dist = Math.sqrt(distSq);
+                    if (dist < innerDist) continue; // already inside, don't stop
+
+                    // Only react if the intersection is ahead of the car
+                    const towardDot = (dx / dist) * fwd.x + (dz / dist) * fwd.z;
+                    if (towardDot < 0.3) continue;
+
+                    const inA = signal.phaseARoads.has(car.roadIdx);
+                    const inB = signal.phaseBRoads.has(car.roadIdx);
+                    if (!inA && !inB) continue;
+
+                    // Phase 0 = A green, phase 2 = B green
+                    const isRed = inA ? signal.currentPhase !== 0 : signal.currentPhase !== 2;
+                    if (!isRed) continue;
+
+                    // Brake proportionally and hard-stop at the stop line
+                    if (dist <= stopDist) {
+                        currentSpeed = 0;
+                    } else {
+                        const brakeFactor = (dist - stopDist) / (approachDist - stopDist);
+                        currentSpeed = Math.min(currentSpeed, car.baseSpeed * brakeFactor * 0.6);
+                    }
+
+                    // Count this car as queued for adaptive timing
+                    if (dist < queueDist) {
+                        if (inA) signal.phaseAQueueCount++;
+                        else signal.phaseBQueueCount++;
+                    }
+                }
+            }
+            // ── End traffic light check ───────────────────────────────────
+
+            // ── Hotspot slowdown (accident prevention) ───────────────────
+            if (currentSpeed > 0 && hotspots.length > 0) {
+                const influenceSq = CONFIG.HOTSPOT_INFLUENCE_RADIUS * CONFIG.HOTSPOT_INFLUENCE_RADIUS;
+                for (const hs of hotspots) {
+                    const dx = hs.x - car.currentPos.x;
+                    const dz = hs.z - car.currentPos.z;
+                    if (dx * dx + dz * dz < influenceSq) {
+                        currentSpeed *= CONFIG.HOTSPOT_SPEED_PENALTY;
+                        break; // One hotspot hit is enough
+                    }
+                }
+            }
+            // ── End hotspot slowdown ──────────────────────────────────────
+
             const curveLen = curve.getLength();
             if (curveLen > 0.1) {
                 const progressSpeed = (currentSpeed * (0.2 + pf * 0.8)) / curveLen;
@@ -461,6 +559,38 @@ export default function CarSystem({ roads, hour, onMetrics, center }: CarSystemP
         tailLightsRef.current.instanceMatrix.needsUpdate = true;
         wheelRef.current.instanceMatrix.needsUpdate = true;
         smokeRef.current.instanceMatrix.needsUpdate = true;
+
+        // --- Accident / Collision detection ---
+        frameCountRef.current++;
+        if (frameCountRef.current > CONFIG.ACCIDENT_GRACE_FRAMES && onAccident) {
+            const collDist = CONFIG.COLLISION_DISTANCE * METER;
+            for (let i = 0; i < carState.length; i++) {
+                const a = carState[i];
+                if (!a.initialized) continue;
+                for (let j = i + 1; j < carState.length; j++) {
+                    const b = carState[j];
+                    if (!b.initialized) continue;
+                    const pairId = `${i}-${j}`;
+                    if (collidedPairsRef.current.has(pairId)) continue;
+                    const dist = a.currentPos.distanceTo(b.currentPos);
+                    if (dist < collDist) {
+                        collidedPairsRef.current.add(pairId);
+                        a.isExploded = true;
+                        b.isExploded = true;
+                        const midpoint = new THREE.Vector3().addVectors(a.currentPos, b.currentPos).multiplyScalar(0.5);
+                        const bodily = Math.random() < 0.4; // 40% chance of bodily injury
+                        onAccident({
+                            id: pairId,
+                            position: { x: midpoint.x, y: midpoint.y, z: midpoint.z },
+                            plates: [a.plate, b.plate],
+                            bodily,
+                            timestamp: Date.now(),
+                        });
+                        postAccident(midpoint.x, midpoint.z, bodily);
+                    }
+                }
+            }
+        }
 
         const avgSceneSpeed = carState.length > 0 ? speedSum / carState.length : 0;
         const metrics: TrafficMetrics = {

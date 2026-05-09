@@ -29,6 +29,21 @@ class TrafficSnapshot(models.Model):
         return f"Snapshot {self.recorded_at} — hour {self.sim_hour}"
 
 
+class Accident(models.Model):
+    """Single accident event reported by the simulation."""
+    scene_x = models.FloatField()          # Three.js scene x-coordinate
+    scene_z = models.FloatField()          # Three.js scene z-coordinate
+    bodily = models.BooleanField(default=False)
+    recorded_at = models.DateTimeField(auto_now_add=True, db_index=True)
+
+    class Meta:
+        ordering = ["-recorded_at"]
+
+    def __str__(self):
+        severity = "corporel" if self.bodily else "matériel"
+        return f"Accident {severity} @ ({self.scene_x:.1f}, {self.scene_z:.1f}) — {self.recorded_at}"
+
+
 class POI(models.Model):
     name = models.CharField(max_length=255)
     category = models.CharField(max_length=100)
