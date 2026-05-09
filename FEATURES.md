@@ -20,5 +20,5 @@
 
 - [ ] DésIA-iser l'app
 - [ ] Personnaliser le Design Systeme de l'app
-- [ ] Ajouter une page d'accueil pour presenter l'app
-- [ ] Faire en sorte d'afficher uniquement 1 accident corporel et 1 accident materiel sur la map
+- [X] Ajouter une page d'accueil pour presenter l'app
+- [X] Faire en sorte d'afficher uniquement 1 accident corporel et 1 accident materiel sur la map

@@ -27,7 +27,10 @@ export default function Home() {
     const handleAccident = useCallback((event: AccidentEvent) => {
         setAccidents((prev) => {
             if (prev.some((a) => a.id === event.id)) return prev;
-            return [event, ...prev];
+            // Enforce at most 1 corporel + 1 matériel on the map at any time:
+            // drop any existing accident of the same type before adding the new one.
+            const withoutSameType = prev.filter((a) => a.bodily !== event.bodily);
+            return [event, ...withoutSameType];
         });
     }, []);
 
