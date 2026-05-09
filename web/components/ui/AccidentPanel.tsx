@@ -1,8 +1,7 @@
 "use client";
 
-import { useState } from "react";
-import { X, Phone, AlertTriangle, ChevronDown, ChevronUp } from "lucide-react";
 import { motion, AnimatePresence } from "framer-motion";
+import { AlertCircle, Wrench, X, History } from "lucide-react";
 import type { AccidentEvent } from "../simulation/accidentTypes";
 
 interface AccidentPanelProps {
@@ -10,108 +9,61 @@ interface AccidentPanelProps {
     onDismiss: (id: string) => void;
 }
 
-const EMERGENCY_NUMBER = "117"; // Madagascar police/emergency
-
 export default function AccidentPanel({ accidents, onDismiss }: AccidentPanelProps) {
-    if (!accidents.length) return null;
+    if (accidents.length === 0) return null;
 
     return (
-        <div className="fixed bottom-28 left-5 z-50 flex flex-col gap-3 pointer-events-auto max-h-[60vh] overflow-y-auto pr-1">
-            <AnimatePresence>
-                {accidents.map((acc) => (
-                    <AccidentCard key={acc.id} accident={acc} onDismiss={onDismiss} />
-                ))}
-            </AnimatePresence>
-        </div>
-    );
-}
-
-function AccidentCard({ accident, onDismiss }: { accident: AccidentEvent; onDismiss: (id: string) => void }) {
-    const [expanded, setExpanded] = useState(true);
-    const [called, setCalled] = useState(false);
-    const time = new Date(accident.timestamp).toLocaleTimeString("fr-MG", { hour: "2-digit", minute: "2-digit" });
-
-    const handleCall = () => {
-        // In a real system this would trigger a VOIP call / API request.
-        // Here we simulate the action.
-        setCalled(true);
-    };
-
-    const borderColor = accident.bodily ? "border-red-500" : "border-orange-400";
-    const headerBg = accident.bodily ? "bg-red-500/20" : "bg-orange-400/20";
-    const icon = accident.bodily ? "🚨" : "⚠️";
-    const title = accident.bodily ? "ACCIDENT CORPOREL" : "ACCIDENT MATÉRIEL";
-
-    return (
-        <motion.div
-            initial={{ x: -320, opacity: 0 }}
-            animate={{ x: 0, opacity: 1 }}
-            exit={{ x: -320, opacity: 0 }}
-            className={`w-80 bg-slate-950/95 backdrop-blur-lg border ${borderColor} rounded-2xl shadow-2xl overflow-hidden`}
-        >
-            {/* Header */}
-            <div className={`flex items-center gap-2 px-4 py-2 ${headerBg}`}>
-                <span className="text-lg">{icon}</span>
-                <span className="text-white font-bold text-sm flex-1">{title}</span>
-                <span className="text-slate-400 text-xs">{time}</span>
-                <button
-                    onClick={() => setExpanded(!expanded)}
-                    className="text-slate-400 hover:text-white ml-1"
-                    aria-label="Expand"
-                >
-                    {expanded ? <ChevronUp size={16} /> : <ChevronDown size={16} />}
-                </button>
-                <button
-                    onClick={() => onDismiss(accident.id)}
-                    className="text-slate-400 hover:text-red-400 ml-1"
-                    aria-label="Dismiss"
-                >
-                    <X size={16} />
-                </button>
-            </div>
-
-            {expanded && (
-                <div className="px-4 py-3 space-y-3">
-                    {/* Plates */}
-                    <div>
-                        <p className="text-slate-400 text-xs uppercase tracking-wider mb-1">Plaques impliquées</p>
-                        <div className="flex flex-wrap gap-2">
-                            {accident.plates.map((plate) => (
-                                <span
-                                    key={plate}
-                                    className="font-mono font-bold bg-slate-800 border border-slate-600 text-white text-sm px-3 py-1 rounded-lg tracking-widest"
-                                >
-                                    {plate}
-                                </span>
-                            ))}
-                        </div>
-                    </div>
-
-                    {/* Bodily warning */}
-                    {accident.bodily && (
-                        <div className="flex items-center gap-2 bg-red-500/10 border border-red-500/30 rounded-lg px-3 py-2">
-                            <AlertTriangle size={15} className="text-red-400 shrink-0" />
-                            <p className="text-red-300 text-xs">Des blessures corporelles ont été signalées. Appelez les urgences.</p>
-                        </div>
-                    )}
-
-                    {/* Emergency call button */}
-                    {accident.bodily && (
-                        <button
-                            onClick={handleCall}
-                            disabled={called}
-                            className={`w-full flex items-center justify-center gap-2 py-2.5 rounded-xl font-bold text-sm transition-all
-                                ${called
-                                    ? "bg-green-700/40 text-green-300 border border-green-700 cursor-default"
-                                    : "bg-red-600 hover:bg-red-500 active:scale-95 text-white"
-                                }`}
+        <div className="fixed bottom-6 left-1/2 -translate-x-1/2 z-40 w-full max-w-md px-4 pointer-events-none">
+            <div className="flex flex-col gap-3">
+                <AnimatePresence mode="popLayout">
+                    {accidents.map((acc) => (
+                        <motion.div
+                            key={acc.id}
+                            layout
+                            initial={{ opacity: 0, y: 50, scale: 0.9 }}
+                            animate={{ opacity: 1, y: 0, scale: 1 }}
+                            exit={{ opacity: 0, scale: 0.5, transition: { duration: 0.2 } }}
+                            className="pointer-events-auto shadow-2xl"
                         >
-                            <Phone size={16} />
-                            {called ? `✓ Urgences appelées (${EMERGENCY_NUMBER})` : `Appeler le ${EMERGENCY_NUMBER}`}
-                        </button>
-                    )}
-                </div>
-            )}
-        </motion.div>
+                            <div className="alert bg-base-300/95 backdrop-blur-xl border border-error/20 flex flex-row items-center gap-4 py-3 rounded-2xl shadow-error/10">
+                                <div className="bg-error/20 p-2 rounded-xl">
+                                    <AlertCircle className="text-error" size={24} />
+                                </div>
+                                
+                                <div className="flex-1 min-w-0">
+                                    <div className="flex items-center justify-between">
+                                        <h3 className="text-white font-bold text-sm tracking-tight truncate">
+                                            Collision Détectée
+                                        </h3>
+                                        <span className="text-[10px] font-mono text-slate-500 bg-black/30 px-1.5 py-0.5 rounded uppercase">
+                                            {acc.id.split('-')[0]}
+                                        </span>
+                                    </div>
+                                    <p className="text-slate-400 text-xs mt-0.5 flex items-center gap-1.5">
+                                        <History size={10} /> {new Date(acc.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })}
+                                    </p>
+                                </div>
+
+                                <div className="flex items-center gap-2">
+                                    <button
+                                        onClick={() => onDismiss(acc.id)}
+                                        className="btn btn-error btn-sm btn-square rounded-lg group"
+                                        title="Réparer"
+                                    >
+                                        <Wrench size={16} className="group-hover:rotate-45 transition-transform" />
+                                    </button>
+                                    <button
+                                        onClick={() => onDismiss(acc.id)}
+                                        className="btn btn-ghost btn-sm btn-square rounded-lg text-slate-500 hover:text-white"
+                                    >
+                                        <X size={16} />
+                                    </button>
+                                </div>
+                            </div>
+                        </motion.div>
+                    ))}
+                </AnimatePresence>
+            </div>
+        </div>
     );
 }

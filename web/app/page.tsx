@@ -36,7 +36,7 @@ export default function Home() {
     }, []);
 
     return (
-        <main className="relative w-screen h-screen overflow-hidden bg-slate-950">
+        <main data-theme="night" className="relative w-screen h-screen overflow-hidden bg-base-100">
             <AnimatePresence mode="wait">
                 {!showSimulation ? (
                     <motion.div
@@ -68,19 +68,24 @@ export default function Home() {
 
                         {/* Road info popup */}
                         {roadInfo && (
-                            <div
-                                className="fixed top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 
-                                           bg-slate-950/95 backdrop-blur-lg border border-slate-600 
-                                           text-white p-5 rounded-2xl shadow-2xl z-50 whitespace-pre-line 
-                                           text-sm min-w-[220px]"
-                            >
-                                {roadInfo}
-                                <button
-                                    onClick={() => setRoadInfo(null)}
-                                    className="block mt-4 text-xs text-blue-400 hover:text-white underline"
+                            <div className="fixed inset-0 z-[60] flex items-center justify-center p-4 pointer-events-none">
+                                <motion.div 
+                                    initial={{ opacity: 0, scale: 0.9 }}
+                                    animate={{ opacity: 1, scale: 1 }}
+                                    className="card bg-base-300/95 backdrop-blur-xl border border-white/10 shadow-2xl p-6 max-w-sm w-full pointer-events-auto"
                                 >
-                                    Fermer ✕
-                                </button>
+                                    <div className="flex flex-col gap-4">
+                                        <div className="text-white whitespace-pre-line text-sm leading-relaxed">
+                                            {roadInfo}
+                                        </div>
+                                        <button
+                                            onClick={() => setRoadInfo(null)}
+                                            className="btn btn-primary btn-sm rounded-xl"
+                                        >
+                                            Fermer
+                                        </button>
+                                    </div>
+                                </motion.div>
                             </div>
                         )}
 
@@ -91,8 +96,8 @@ export default function Home() {
                             isLoading={isLoading}
                         />
 
-                        {/* Real-time traffic stats panel — top-right */}
-                        <div className="fixed top-5 right-16 z-40 pointer-events-none">
+                        {/* Real-time traffic stats panel — top-right responsive */}
+                        <div className="fixed top-20 right-4 md:top-24 md:right-6 z-40 pointer-events-none">
                             <TrafficStatsPanel metrics={metrics} />
                         </div>
 
