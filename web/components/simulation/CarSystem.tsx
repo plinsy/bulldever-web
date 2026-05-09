@@ -5,7 +5,7 @@ import * as THREE from "three";
 import { OsmRoad, CENTER, SCALE, METER } from "../world/geo";
 import { useFrame } from "@react-three/fiber";
 
-const MAX_CARS = 500;
+const MAX_CARS = 50;
 
 // Car color palette – varied realistic vehicle colors
 const CAR_COLORS = [
@@ -40,15 +40,67 @@ function peakFactor(hour: number) {
 export default function CarSystem({ roads, hour }: CarSystemProps) {
     const meshRef = useRef<THREE.InstancedMesh>(null!);
 
+    const roadConnections = useMemo(() => {
+        const map = new Map<number, { roadIdx: number, myEnd: number, theirEnd: number }[]>();
+        for (let i = 0; i < roads.length; i++) {
+            map.set(i, []);
+        }
+        for (let i = 0; i < roads.length; i++) {
+            const p1 = roads[i].points;
+            if (p1.length < 2) continue;
+            const end1 = p1[p1.length - 1];
+            const start1 = p1[0];
+
+            for (let j = i + 1; j < roads.length; j++) {
+                const p2 = roads[j].points;
+                if (p2.length < 2) continue;
+                // Check if endpoints are close (within ~15m)
+                const check = (a: any, b: any) => Math.abs(a.lat - b.lat) < 0.00015 && Math.abs(a.lng - b.lng) < 0.00015;
+                
+                if (check(start1, p2[0])) {
+                    map.get(i)!.push({ roadIdx: j, myEnd: 0, theirEnd: 0 });
+                    map.get(j)!.push({ roadIdx: i, myEnd: 0, theirEnd: 0 });
+                } else if (check(start1, p2[p2.length - 1])) {
+                    map.get(i)!.push({ roadIdx: j, myEnd: 0, theirEnd: 1 });
+                    map.get(j)!.push({ roadIdx: i, myEnd: 1, theirEnd: 0 });
+                } else if (check(end1, p2[0])) {
+                    map.get(i)!.push({ roadIdx: j, myEnd: 1, theirEnd: 0 });
+                    map.get(j)!.push({ roadIdx: i, myEnd: 0, theirEnd: 1 });
+                } else if (check(end1, p2[p2.length - 1])) {
+                    map.get(i)!.push({ roadIdx: j, myEnd: 1, theirEnd: 1 });
+                    map.get(j)!.push({ roadIdx: i, myEnd: 1, theirEnd: 1 });
+                }
+            }
+        }
+        return map;
+    }, [roads]);
+
     const carState = useMemo(() => {
         if (!roads.length) return [];
-        return Array.from({ length: MAX_CARS }, (_, i) => ({
-            roadIdx: i % roads.length,
-            progress: Math.random(),
-            speed: 0.0008 + Math.random() * 0.0018,
-            laneOffset: ((Math.random() - 0.5) * 3.0) * METER, // +/- 1.5 meters offset
-            colorIdx: Math.floor(Math.random() * CAR_COLORS.length),
-        }));
+        
+        // Find roads closest to the center so cars spawn in the immediate view
+        const sortedRoads = roads.map((r, i) => {
+            const pts = roadXZ(r);
+            let cx = 0, cz = 0;
+            if (pts.length) {
+                cx = pts[0].x; cz = pts[0].z;
+            }
+            return { idx: i, distSq: cx*cx + cz*cz };
+        }).sort((a, b) => a.distSq - b.distSq);
+        
+        const closestRoads = sortedRoads.slice(0, Math.max(1, Math.min(50, sortedRoads.length)));
+
+        return Array.from({ length: MAX_CARS }, (_, i) => {
+            const baseSpeed = 0.0008 + Math.random() * 0.0018;
+            return {
+                roadIdx: closestRoads[i % closestRoads.length].idx,
+                progress: Math.random(),
+                direction: Math.random() > 0.5 ? 1 : -1,
+                baseSpeed,
+                laneOffset: ((Math.random() - 0.5) * 2.0) * METER, // +/- 1 meter offset
+                colorIdx: Math.floor(Math.random() * CAR_COLORS.length),
+            };
+        });
     }, [roads]);
 
     const roadCurves = useMemo(() =>
@@ -69,20 +121,63 @@ export default function CarSystem({ roads, hour }: CarSystemProps) {
             const curve = roadCurves[car.roadIdx];
             if (!curve) return;
 
-            car.progress += car.speed * (0.2 + pf * 0.8);
-            if (car.progress > 1) {
-                car.progress = 0;
-                car.roadIdx = Math.floor(Math.random() * roads.length);
+            // 1. Traffic Jam Logic: Check for cars in front using true physical distance
+            let minDistanceInFront = Infinity;
+            const roadLen = curve.getLength();
+
+            carState.forEach((otherCar, j) => {
+                if (i !== j && otherCar.roadIdx === car.roadIdx && otherCar.direction === car.direction) {
+                    const progressDist = (otherCar.progress - car.progress) * car.direction;
+                    if (progressDist > 0 && progressDist < 0.5) {
+                        const physDist = progressDist * roadLen; // True distance in scene units
+                        minDistanceInFront = Math.min(minDistanceInFront, physDist);
+                    }
+                }
+            });
+
+            let currentSpeed = car.baseSpeed;
+            const safeGap = 6.0 * METER; // 6 meters gap to stop
+            const slowGap = 15.0 * METER; // 15 meters to start slowing down
+
+            if (minDistanceInFront < safeGap) {
+                currentSpeed = 0; // Stop completely to avoid crash
+            } else if (minDistanceInFront < slowGap) {
+                currentSpeed *= 0.3; // Slow down
             }
 
-            const t = Math.min(car.progress, 0.9999);
+            car.progress += currentSpeed * car.direction * (0.2 + pf * 0.8);
+            
+            // 2. Intersection & Bounce logic
+            if (car.progress >= 1 || car.progress <= 0) {
+                const atEnd = car.progress >= 1 ? 1 : 0;
+                // Only consider connections that touch the exact end we are at
+                const conns = roadConnections.get(car.roadIdx)?.filter(c => c.myEnd === atEnd) || [];
+                
+                if (conns.length > 0 && Math.random() > 0.2) {
+                    // Turn seamlessly into the connected road
+                    const conn = conns[Math.floor(Math.random() * conns.length)];
+                    car.roadIdx = conn.roadIdx;
+                    car.progress = conn.theirEnd;
+                    // Drive away from the endpoint we just spawned on
+                    car.direction = conn.theirEnd === 0 ? 1 : -1;
+                } else {
+                    // Dead end, or 20% chance to just turn around
+                    car.progress = atEnd;
+                    car.direction *= -1; // reverse direction
+                }
+            }
+
+            const t = Math.max(0, Math.min(1, car.progress));
             const pos = curve.getPointAt(t);
             const tang = curve.getTangentAt(t);
-            const side = new THREE.Vector3(-tang.z, 0, tang.x).multiplyScalar(car.laneOffset);
+            
+            // If driving backward, face the opposite way
+            const forward = car.direction === 1 ? tang : tang.clone().negate();
+            const side = new THREE.Vector3(-forward.z, 0, forward.x).normalize().multiplyScalar(car.laneOffset);
 
             const yOffset = 0.02 + (1.5 * METER) / 2; // Road surface + half car height
             dummy.position.set(pos.x + side.x, yOffset, pos.z + side.z);
-            dummy.lookAt(pos.x + tang.x, yOffset, pos.z + tang.z);
+            dummy.lookAt(pos.x + side.x + forward.x, yOffset, pos.z + side.z + forward.z);
             dummy.updateMatrix();
             meshRef.current.setMatrixAt(i, dummy.matrix);
 
