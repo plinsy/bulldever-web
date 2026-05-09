@@ -91,7 +91,8 @@ export default function CarSystem({ roads, hour }: CarSystemProps) {
         const closestRoads = sortedRoads.slice(0, Math.max(1, Math.min(50, sortedRoads.length)));
 
         return Array.from({ length: MAX_CARS }, (_, i) => {
-            const baseSpeed = 0.0008 + Math.random() * 0.0018;
+            // Physical base speed in scene units per frame (~25 to 50 km/h)
+            const baseSpeed = 0.005 + Math.random() * 0.01;
             return {
                 roadIdx: closestRoads[i % closestRoads.length].idx,
                 progress: Math.random(),
@@ -131,9 +132,19 @@ export default function CarSystem({ roads, hour }: CarSystemProps) {
             carState.forEach((otherCar, j) => {
                 if (i === j || !otherCar.initialized || !car.initialized) return;
 
+                const sameRoadAndDir = (otherCar.roadIdx === car.roadIdx && otherCar.direction === car.direction);
+
                 // Ignore oncoming traffic on the exact same road
                 if (otherCar.roadIdx === car.roadIdx && otherCar.direction !== car.direction) {
                     return;
+                }
+
+                // Intersection Priority Rule (Right-of-way):
+                // To mathematically prevent circular deadlocks at intersections where cars wait for each other forever,
+                // cars on intersecting roads only yield to cars with a lower index.
+                // Cars on the same road/lane ALWAYS yield to the car in front to prevent rear-ending.
+                if (!sameRoadAndDir && i > j) {
+                    return; // I have priority, I don't yield!
                 }
 
                 const toOther = new THREE.Vector3().subVectors(otherCar.currentPos, car.currentPos);
@@ -156,6 +167,9 @@ export default function CarSystem({ roads, hour }: CarSystemProps) {
                 }
             });
 
+            const curveLen = curve.getLength();
+            if (curveLen < 0.1) return; // Safeguard against zero-length roads
+
             let currentSpeed = car.baseSpeed;
             const safeGap = 6.0 * METER; // 6 meters gap to stop
             const slowGap = 15.0 * METER; // 15 meters to start slowing down
@@ -166,7 +180,9 @@ export default function CarSystem({ roads, hour }: CarSystemProps) {
                 currentSpeed *= 0.3; // Slow down
             }
 
-            car.progress += currentSpeed * car.direction * (0.2 + pf * 0.8);
+            // Convert physical speed (scene units/frame) into progress units (0 to 1)
+            const progressSpeed = (currentSpeed * (0.2 + pf * 0.8)) / curveLen;
+            car.progress += progressSpeed * car.direction;
             
             // 2. Intersection & Bounce logic
             if (car.progress >= 1 || car.progress <= 0) {
@@ -205,10 +221,18 @@ export default function CarSystem({ roads, hour }: CarSystemProps) {
                 car.currentLookAt.copy(targetLookAt);
                 car.initialized = true;
             } else {
-                // Smoothly interpolate! This completely hides the "teleport" at intersections
-                // because the car will smoothly "drift" into the new lane instead of snapping instantly.
-                car.currentPos.lerp(targetPos, 0.15);
-                car.currentLookAt.lerp(targetLookAt, 0.15);
+                // Smooth physical turning at intersections
+                // Car moves laterally towards target position at max 1.5x its forward speed
+                const moveSpeed = Math.max(0.01, currentSpeed * (0.2 + pf * 0.8) * 1.5);
+                const toTarget = new THREE.Vector3().subVectors(targetPos, car.currentPos);
+                
+                if (toTarget.length() <= moveSpeed) {
+                    car.currentPos.copy(targetPos);
+                } else {
+                    car.currentPos.add(toTarget.normalize().multiplyScalar(moveSpeed));
+                }
+                
+                car.currentLookAt.lerp(targetLookAt, 0.1);
             }
 
             dummy.position.copy(car.currentPos);
