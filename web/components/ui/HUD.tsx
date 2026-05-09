@@ -1,6 +1,6 @@
 "use client";
 
-import { Clock, Navigation, MessageSquare, Loader2 } from "lucide-react";
+import { Navigation, MessageSquare, Loader2 } from "lucide-react";
 
 interface HUDProps {
     hour: number;
@@ -10,14 +10,7 @@ interface HUDProps {
     retryAttempt?: number;
 }
 
-export default function HUD({ hour, setHour, toggleChat, isLoading, retryAttempt = 0 }: HUDProps) {
-    const timeLabel = `${hour.toString().padStart(2, '0')}:00`;
-    const peakLabel =
-        (hour >= 7 && hour <= 9) ? "🔴 Heure de pointe (matin)"
-        : (hour >= 16 && hour <= 19) ? "🔴 Heure de pointe (soir)"
-        : (hour >= 10 && hour <= 15) ? "🟡 Trafic modéré"
-        : "🟢 Trafic fluide";
-
+export default function HUD({ toggleChat, isLoading, retryAttempt = 0 }: HUDProps) {
     return (
         <div className="fixed inset-0 pointer-events-none p-5 flex flex-col justify-between">
             {/* Top Bar */}
@@ -48,29 +41,6 @@ export default function HUD({ hour, setHour, toggleChat, isLoading, retryAttempt
                 >
                     <MessageSquare size={22} />
                 </button>
-            </div>
-
-            {/* Bottom Controls */}
-            <div className="bg-slate-950/85 backdrop-blur-lg border border-slate-700/60 p-5 rounded-2xl shadow-2xl pointer-events-auto w-full max-w-lg mx-auto">
-                <div className="flex items-center gap-4 mb-3">
-                    <Clock size={18} className="text-blue-400 shrink-0" />
-                    <span className="text-white font-mono text-lg w-16">{timeLabel}</span>
-                    <input
-                        type="range"
-                        min="0"
-                        max="23"
-                        value={hour}
-                        onChange={(e) => setHour(parseInt(e.target.value))}
-                        className="flex-1 h-2 appearance-none bg-slate-700 rounded-full outline-none cursor-pointer accent-blue-500"
-                    />
-                </div>
-                <p className="text-center text-sm text-slate-300">{peakLabel}</p>
-
-                <div className="grid grid-cols-3 gap-2 text-center text-xs mt-3">
-                    <div className="p-2 rounded-lg bg-green-500/10 border border-green-500/40 text-green-400 font-medium">● Fluide</div>
-                    <div className="p-2 rounded-lg bg-orange-500/10 border border-orange-500/40 text-orange-400 font-medium">● Ralenti</div>
-                    <div className="p-2 rounded-lg bg-red-500/10 border border-red-500/40 text-red-400 font-medium">● Bouchon</div>
-                </div>
             </div>
         </div>
     );

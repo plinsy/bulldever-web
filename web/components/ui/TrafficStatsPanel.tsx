@@ -3,7 +3,6 @@
 import { useState, useEffect } from "react";
 import { Car, StopCircle, GitFork, Gauge } from "lucide-react";
 import type { TrafficMetrics } from "@/components/simulation/CarSystem";
-import { ZONES } from "@/components/simulation/zones";
 
 const API_BASE = "http://localhost:8000/api";
 
@@ -35,6 +34,17 @@ function zoneStatusDot(stoppedPct: number): { dot: string; label: string; bar: s
     if (stoppedPct > 20) return { dot: "bg-orange-400", label: "Ralenti", bar: "bg-orange-400" };
     return                       { dot: "bg-green-500", label: "Fluide",  bar: "bg-green-500" };
 }
+
+const STATIC_ZONES = [
+    { id: "analakely",   label: "Analakely" },
+    { id: "anosizato",   label: "Anosizato" },
+    { id: "isotry",      label: "Isotry" },
+    { id: "67ha",        label: "67 Ha" },
+    { id: "ambohijatovo",label: "Ambohijatovo" },
+    { id: "tsaralalana", label: "Tsaralalana" },
+    { id: "ankorondrano",label: "Ankorondrano" },
+    { id: "behoririka",  label: "Behoririka" },
+];
 
 export default function TrafficStatsPanel({ metrics }: TrafficStatsPanelProps) {
     const [alerts, setAlerts] = useState<any[]>([]);
@@ -76,12 +86,12 @@ export default function TrafficStatsPanel({ metrics }: TrafficStatsPanelProps) {
     const congestionColor =
         stoppedPct > 40 ? "text-red-400" : stoppedPct > 20 ? "text-orange-400" : "text-green-400";
 
-    const zoneRows = ZONES.map((zone) => {
+    const zoneRows = STATIC_ZONES.map((zone) => {
         const stat = metrics.zoneStats[zone.id] ?? { total: 0, stopped: 0 };
         const pct = stat.total > 0 ? Math.round((stat.stopped / stat.total) * 100) : 0;
         const status = zoneStatusDot(pct);
         return { zone, stat, pct, status };
-    });
+    }).filter(row => row.stat.total > 0); // Only show zones with active traffic in current tile
 
     zoneRows.sort((a, b) => b.pct - a.pct || b.stat.total - a.stat.total);
 
@@ -124,42 +134,44 @@ export default function TrafficStatsPanel({ metrics }: TrafficStatsPanelProps) {
             )}
 
             {/* Per-zone breakdown */}
-            <p className="text-slate-500 text-xs mt-3 mb-2 uppercase tracking-wider">
-                État par zone
-            </p>
-            <div className="space-y-1.5">
-                {zoneRows.map(({ zone, stat, pct, status }) => (
-                    <div key={zone.id} className="rounded-lg bg-slate-900/60 border border-slate-700/40 px-3 py-2">
-                        <div className="flex items-center gap-2 mb-1">
-                            <span className={`w-2 h-2 rounded-full shrink-0 ${status.dot}`} />
-                            <span className="text-white text-xs font-medium flex-1">{zone.label}</span>
-                            <span className={`text-xs font-semibold ${
-                                pct > 40 ? "text-red-400" : pct > 20 ? "text-orange-400" : "text-green-400"
-                            }`}>
-                                {status.label}
-                            </span>
-                        </div>
-                        <div className="flex gap-3 text-xs text-slate-400 pl-4">
-                            <span><span className="text-white font-mono">{stat.total}</span> véh.</span>
-                            <span><span className="text-red-400 font-mono">{stat.stopped}</span> arrêtés</span>
-                            {stat.total > 0 && (
-                                <span className="ml-auto text-slate-500">{pct}%</span>
-                            )}
-                        </div>
-                        {/* Congestion bar */}
-                        {stat.total > 0 && (
-                            <div className="mt-1.5 pl-4">
-                                <div className="h-1 w-full bg-slate-700 rounded-full overflow-hidden">
-                                    <div
-                                        className={`h-full rounded-full transition-all duration-500 ${status.bar}`}
-                                        style={{ width: `${pct}%` }}
-                                    />
+            {zoneRows.length > 0 && (
+                <>
+                    <p className="text-slate-500 text-xs mt-3 mb-2 uppercase tracking-wider">
+                        État par zone
+                    </p>
+                    <div className="space-y-1.5">
+                        {zoneRows.map(({ zone, stat, pct, status }) => (
+                            <div key={zone.id} className="rounded-lg bg-slate-900/60 border border-slate-700/40 px-3 py-2">
+                                <div className="flex items-center gap-2 mb-1">
+                                    <span className={`w-2 h-2 rounded-full shrink-0 ${status.dot}`} />
+                                    <span className="text-white text-xs font-medium flex-1">{zone.label}</span>
+                                    <span className={`text-xs font-semibold ${
+                                        pct > 40 ? "text-red-400" : pct > 20 ? "text-orange-400" : "text-green-400"
+                                    }`}>
+                                        {status.label}
+                                    </span>
+                                </div>
+                                <div className="flex gap-3 text-xs text-slate-400 pl-4">
+                                    <span><span className="text-white font-mono">{stat.total}</span> véh.</span>
+                                    <span><span className="text-red-400 font-mono">{stat.stopped}</span> arrêtés</span>
+                                    {stat.total > 0 && (
+                                        <span className="ml-auto text-slate-500">{pct}%</span>
+                                    )}
+                                </div>
+                                {/* Congestion bar */}
+                                <div className="mt-1.5 pl-4">
+                                    <div className="h-1 w-full bg-slate-700 rounded-full overflow-hidden">
+                                        <div
+                                            className={`h-full rounded-full transition-all duration-500 ${status.bar}`}
+                                            style={{ width: `${pct}%` }}
+                                        />
+                                    </div>
                                 </div>
                             </div>
-                        )}
+                        ))}
                     </div>
-                ))}
-            </div>
+                </>
+            )}
 
             {topIntersections.length > 0 && (
                 <>
