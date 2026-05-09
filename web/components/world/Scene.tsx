@@ -1,9 +1,8 @@
 "use client";
 
-import { Canvas, useFrame } from "@react-three/fiber";
+import { Canvas } from "@react-three/fiber";
 import {
   OrbitControls,
-  PerspectiveCamera,
   Sky,
   GizmoHelper,
   GizmoViewport,
@@ -19,7 +18,7 @@ import {
 } from "react";
 import * as THREE from "three";
 import RoadNetwork from "./RoadNetwork";
-import CarSystem from "../simulation/CarSystem";
+import CarSystem, { TrafficMetrics } from "../simulation/CarSystem";
 import {
   useOsmRoads,
   useOsmBuildings,
@@ -101,7 +100,6 @@ function BuildingMesh({ b, color }: { b: OsmBuilding; color: string }) {
       if (cleanPts.length < 3) return new THREE.BufferGeometry();
 
       // Ensure counter-clockwise winding order so normals point OUTWARD.
-      // If clockwise, the building is inside-out (we only see the bottom face Z-fighting the ground).
       const vec2s = cleanPts.map(p => new THREE.Vector2(p.x, -p.z));
       if (THREE.ShapeUtils.isClockWise(vec2s)) {
         cleanPts.reverse();
@@ -154,9 +152,10 @@ interface SceneProps {
   hour: number;
   onRoadInfo: (info: string) => void;
   onLoadingChange?: (loading: boolean) => void;
+  onMetrics?: (metrics: TrafficMetrics) => void;
 }
 
-function WorldContent({ hour, onRoadInfo, onLoadingChange }: SceneProps) {
+function WorldContent({ hour, onRoadInfo, onLoadingChange, onMetrics }: SceneProps) {
   const { roads, loading: roadsLoading } = useOsmRoads();
   const { buildings, loading: bldgLoading } = useOsmBuildings();
   // Combined loading state for HUD spinner
@@ -285,7 +284,7 @@ function WorldContent({ hour, onRoadInfo, onLoadingChange }: SceneProps) {
 
       {/* Vehicles — only once roads are ready */}
       {!roadsLoading && roads.length > 0 && (
-        <CarSystem roads={roads} hour={hour} />
+        <CarSystem roads={roads} hour={hour} onMetrics={onMetrics} />
       )}
 
       {/* Helper */}
@@ -300,6 +299,7 @@ export default function Scene({
   hour,
   onRoadInfo,
   onLoadingChange,
+  onMetrics
 }: SceneProps) {
   return (
     <div className="w-full h-full">
@@ -324,6 +324,7 @@ export default function Scene({
             hour={hour}
             onRoadInfo={onRoadInfo}
             onLoadingChange={onLoadingChange}
+            onMetrics={onMetrics}
           />
         </Suspense>
       </Canvas>
