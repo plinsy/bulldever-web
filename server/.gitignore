@@ -18,4 +18,10 @@ local_settings.py
 /media/
 /staticfiles/
 
+
+.venv/
+__pycache__/
+server/__pycache__/
+
 .venv
+
