@@ -2,6 +2,7 @@
 
 import { useMemo, useRef } from "react";
 import * as THREE from "three";
+import * as BufferGeometryUtils from "three/examples/jsm/utils/BufferGeometryUtils.js";
 import { OsmRoad, CENTER, SCALE, METER } from "../world/geo";
 import { useFrame } from "@react-three/fiber";
 
@@ -114,11 +115,45 @@ export default function CarSystem({ roads, hour }: CarSystemProps) {
         }),
     [roads]);
 
+    // Pre-calculated geometries for the detailed car model
+    const carGeos = useMemo(() => {
+        const chassis = new THREE.BoxGeometry(1.8 * METER, 0.6 * METER, 4.0 * METER);
+        chassis.translate(0, 0.3 * METER, 0);
+
+        const cabin = new THREE.BoxGeometry(1.6 * METER, 0.6 * METER, 2.2 * METER);
+        cabin.translate(0, 0.9 * METER, -0.4 * METER);
+
+        const headLight = new THREE.BoxGeometry(0.35 * METER, 0.15 * METER, 0.1 * METER);
+        const hl1 = headLight.clone().translate(0.6 * METER, 0.4 * METER, 2.0 * METER);
+        const hl2 = headLight.clone().translate(-0.6 * METER, 0.4 * METER, 2.0 * METER);
+        const headlights = BufferGeometryUtils.mergeGeometries([hl1, hl2]);
+
+        const tailLight = new THREE.BoxGeometry(0.35 * METER, 0.15 * METER, 0.1 * METER);
+        const tl1 = tailLight.clone().translate(0.6 * METER, 0.4 * METER, -2.0 * METER);
+        const tl2 = tailLight.clone().translate(-0.6 * METER, 0.4 * METER, -2.0 * METER);
+        const taillights = BufferGeometryUtils.mergeGeometries([tl1, tl2]);
+
+        const wheel = new THREE.BoxGeometry(0.3 * METER, 0.5 * METER, 0.7 * METER);
+        const w1 = wheel.clone().translate(0.9 * METER, 0.25 * METER, 1.2 * METER);
+        const w2 = wheel.clone().translate(-0.9 * METER, 0.25 * METER, 1.2 * METER);
+        const w3 = wheel.clone().translate(0.9 * METER, 0.25 * METER, -1.2 * METER);
+        const w4 = wheel.clone().translate(-0.9 * METER, 0.25 * METER, -1.2 * METER);
+        const wheels = BufferGeometryUtils.mergeGeometries([w1, w2, w3, w4]);
+
+        return { chassis, cabin, headlights, taillights, wheels };
+    }, []);
+
+    const chassisRef = useRef<THREE.InstancedMesh>(null!);
+    const cabinRef = useRef<THREE.InstancedMesh>(null!);
+    const headLightsRef = useRef<THREE.InstancedMesh>(null!);
+    const tailLightsRef = useRef<THREE.InstancedMesh>(null!);
+    const wheelRef = useRef<THREE.InstancedMesh>(null!);
+
     const dummy = useMemo(() => new THREE.Object3D(), []);
     const tempColor = useMemo(() => new THREE.Color(), []);
 
     useFrame(() => {
-        if (!meshRef.current || !roadCurves.length) return;
+        if (!chassisRef.current || !roadCurves.length) return;
         const pf = peakFactor(hour);
 
         carState.forEach((car, i) => {
@@ -126,81 +161,64 @@ export default function CarSystem({ roads, hour }: CarSystemProps) {
             if (!curve) return;
 
             // 1. Radar Collision Logic: Check physical 3D distance to all other cars
-            // This prevents overlapping even at intersections when cars cross paths!
             let minDistanceInFront = Infinity;
 
             carState.forEach((otherCar, j) => {
                 if (i === j || !otherCar.initialized || !car.initialized) return;
-
+                
                 const sameRoadAndDir = (otherCar.roadIdx === car.roadIdx && otherCar.direction === car.direction);
 
                 // Ignore oncoming traffic on the exact same road
-                if (otherCar.roadIdx === car.roadIdx && otherCar.direction !== car.direction) {
-                    return;
-                }
+                if (otherCar.roadIdx === car.roadIdx && otherCar.direction !== car.direction) return;
 
-                // Intersection Priority Rule (Right-of-way):
-                // To mathematically prevent circular deadlocks at intersections where cars wait for each other forever,
-                // cars on intersecting roads only yield to cars with a lower index.
-                // Cars on the same road/lane ALWAYS yield to the car in front to prevent rear-ending.
-                if (!sameRoadAndDir && i > j) {
-                    return; // I have priority, I don't yield!
-                }
+                // Priority Rule: yield to cars with lower index at intersections
+                if (!sameRoadAndDir && i > j) return;
 
                 const toOther = new THREE.Vector3().subVectors(otherCar.currentPos, car.currentPos);
                 const dist = toOther.length();
 
-                // If other car is physically close (within ~20 meters)
                 if (dist < 20.0 * METER) {
                     toOther.normalize();
-                    
                     const curveT = Math.max(0, Math.min(1, car.progress));
                     const fwd = curve.getTangentAt(curveT);
                     if (car.direction === -1) fwd.negate();
 
                     const dot = fwd.dot(toOther);
-                    
-                    // If the other car is in our forward "cone" (dot > 0.85 is ~31 degrees)
                     if (dot > 0.85) {
                         minDistanceInFront = Math.min(minDistanceInFront, dist);
                     }
                 }
             });
 
-            const curveLen = curve.getLength();
-            if (curveLen < 0.1) return; // Safeguard against zero-length roads
-
             let currentSpeed = car.baseSpeed;
-            const safeGap = 6.0 * METER; // 6 meters gap to stop
-            const slowGap = 15.0 * METER; // 15 meters to start slowing down
+            const safeGap = 6.0 * METER;
+            const slowGap = 15.0 * METER;
 
             if (minDistanceInFront < safeGap) {
-                currentSpeed = 0; // Stop completely to avoid crash
+                currentSpeed = 0;
             } else if (minDistanceInFront < slowGap) {
-                currentSpeed *= 0.3; // Slow down
+                currentSpeed *= 0.3;
             }
 
-            // Convert physical speed (scene units/frame) into progress units (0 to 1)
-            const progressSpeed = (currentSpeed * (0.2 + pf * 0.8)) / curveLen;
-            car.progress += progressSpeed * car.direction;
+            const curveLen = curve.getLength();
+            if (curveLen > 0.1) {
+                const progressSpeed = (currentSpeed * (0.2 + pf * 0.8)) / curveLen;
+                car.progress += progressSpeed * car.direction;
+            }
             
             // 2. Intersection & Bounce logic
             if (car.progress >= 1 || car.progress <= 0) {
                 const atEnd = car.progress >= 1 ? 1 : 0;
-                // Only consider connections that touch the exact end we are at
                 const conns = roadConnections.get(car.roadIdx)?.filter(c => c.myEnd === atEnd) || [];
                 
                 if (conns.length > 0 && Math.random() > 0.2) {
-                    // Turn seamlessly into the connected road
                     const conn = conns[Math.floor(Math.random() * conns.length)];
                     car.roadIdx = conn.roadIdx;
                     car.progress = conn.theirEnd;
-                    // Drive away from the endpoint we just spawned on
                     car.direction = conn.theirEnd === 0 ? 1 : -1;
                 } else {
-                    // Dead end, or 20% chance to just turn around
                     car.progress = atEnd;
-                    car.direction *= -1; // reverse direction
+                    car.direction *= -1;
                 }
             }
 
@@ -208,11 +226,10 @@ export default function CarSystem({ roads, hour }: CarSystemProps) {
             const pos = curve.getPointAt(t);
             const tang = curve.getTangentAt(t);
             
-            // If driving backward, face the opposite way
             const forward = car.direction === 1 ? tang : tang.clone().negate();
             const side = new THREE.Vector3(-forward.z, 0, forward.x).normalize().multiplyScalar(car.laneOffset);
 
-            const yOffset = 0.02 + (1.5 * METER) / 2; // Road surface + half car height
+            const yOffset = 0.02; // Position on road
             const targetPos = new THREE.Vector3(pos.x + side.x, yOffset, pos.z + side.z);
             const targetLookAt = new THREE.Vector3(targetPos.x + forward.x, yOffset, targetPos.z + forward.z);
 
@@ -221,8 +238,6 @@ export default function CarSystem({ roads, hour }: CarSystemProps) {
                 car.currentLookAt.copy(targetLookAt);
                 car.initialized = true;
             } else {
-                // Smooth physical turning at intersections
-                // Car moves laterally towards target position at max 1.5x its forward speed
                 const moveSpeed = Math.max(0.01, currentSpeed * (0.2 + pf * 0.8) * 1.5);
                 const toTarget = new THREE.Vector3().subVectors(targetPos, car.currentPos);
                 
@@ -232,31 +247,55 @@ export default function CarSystem({ roads, hour }: CarSystemProps) {
                     car.currentPos.add(toTarget.normalize().multiplyScalar(moveSpeed));
                 }
                 
-                car.currentLookAt.lerp(targetLookAt, 0.1);
+                car.currentLookAt.lerp(targetLookAt, 0.15);
             }
 
             dummy.position.copy(car.currentPos);
             dummy.lookAt(car.currentLookAt);
             dummy.updateMatrix();
-            meshRef.current.setMatrixAt(i, dummy.matrix);
+
+            // Sync all instance parts with the same matrix
+            chassisRef.current.setMatrixAt(i, dummy.matrix);
+            cabinRef.current.setMatrixAt(i, dummy.matrix);
+            headLightsRef.current.setMatrixAt(i, dummy.matrix);
+            tailLightsRef.current.setMatrixAt(i, dummy.matrix);
+            wheelRef.current.setMatrixAt(i, dummy.matrix);
 
             tempColor.copy(CAR_COLORS[car.colorIdx]);
-            meshRef.current.setColorAt(i, tempColor);
+            chassisRef.current.setColorAt(i, tempColor);
         });
 
-        meshRef.current.instanceMatrix.needsUpdate = true;
-        if (meshRef.current.instanceColor) {
-            meshRef.current.instanceColor.needsUpdate = true;
-        }
+        chassisRef.current.instanceMatrix.needsUpdate = true;
+        chassisRef.current.instanceColor!.needsUpdate = true;
+        cabinRef.current.instanceMatrix.needsUpdate = true;
+        headLightsRef.current.instanceMatrix.needsUpdate = true;
+        tailLightsRef.current.instanceMatrix.needsUpdate = true;
+        wheelRef.current.instanceMatrix.needsUpdate = true;
     });
 
     if (!roads.length) return null;
 
-    // A car is roughly 2m wide, 1.5m tall, 4.5m long
     return (
-        <instancedMesh ref={meshRef} args={[null as any, null as any, MAX_CARS]} castShadow>
-            <boxGeometry args={[2.0 * METER, 1.5 * METER, 4.5 * METER]} />
-            <meshStandardMaterial metalness={0.3} roughness={0.5} />
-        </instancedMesh>
+        <group>
+            <instancedMesh ref={chassisRef} args={[carGeos.chassis, null as any, MAX_CARS]} castShadow>
+                <meshStandardMaterial roughness={0.5} metalness={0.6} />
+            </instancedMesh>
+
+            <instancedMesh ref={cabinRef} args={[carGeos.cabin, null as any, MAX_CARS]} castShadow>
+                <meshStandardMaterial color="#111" roughness={0.1} metalness={0.9} />
+            </instancedMesh>
+
+            <instancedMesh ref={headLightsRef} args={[carGeos.headlights, null as any, MAX_CARS]}>
+                <meshStandardMaterial color="#fff" emissive="#fff" emissiveIntensity={2} />
+            </instancedMesh>
+
+            <instancedMesh ref={tailLightsRef} args={[carGeos.taillights, null as any, MAX_CARS]}>
+                <meshStandardMaterial color="#f00" emissive="#f00" emissiveIntensity={2} />
+            </instancedMesh>
+
+            <instancedMesh ref={wheelRef} args={[carGeos.wheels, null as any, MAX_CARS]}>
+                <meshStandardMaterial color="#050505" roughness={0.9} />
+            </instancedMesh>
+        </group>
     );
 }
