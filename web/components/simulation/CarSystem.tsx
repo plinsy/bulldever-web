@@ -8,7 +8,7 @@ import { classifyZone } from "./zones";
 import { useFrame } from "@react-three/fiber";
 import { Html } from "@react-three/drei";
 import * as CONFIG from "./config";
-import type { AccidentEvent } from "./accidentTypes";
+import type { AccidentEvent, AccidentHotspot } from "./accidentTypes";
 import type { TrafficSignalMap } from "./trafficLightTypes";
 
 export type { AccidentEvent };
@@ -49,6 +49,8 @@ interface CarSystemProps {
     onAccident?: (event: AccidentEvent) => void;
     /** Shared signal map written by TrafficLightSystem; read here to stop cars at red lights. */
     signalMapRef?: React.MutableRefObject<TrafficSignalMap>;
+    /** Danger zones fetched from the backend; cars slow down near them. */
+    hotspots?: AccidentHotspot[];
 }
 
 /** Generate a Madagascar-style license plate: "AB 1234" or "TAM 5678" */
@@ -109,6 +111,18 @@ function sceneSpeedToKmh(sceneUnitsPerFrame: number, fps = 60): number {
     return metersPerSecond * 3.6;
 }
 
+async function postAccident(x: number, z: number, bodily: boolean): Promise<void> {
+    try {
+        await fetch(`${API_BASE}/accidents/`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ scene_x: x, scene_z: z, bodily }),
+        });
+    } catch {
+        // Network errors are non-fatal; simulation continues
+    }
+}
+
 async function postSnapshot(metrics: TrafficMetrics, hour: number): Promise<void> {
     try {
         await fetch(`${API_BASE}/traffic-stats/`, {
@@ -129,7 +143,7 @@ async function postSnapshot(metrics: TrafficMetrics, hour: number): Promise<void
     }
 }
 
-export default function CarSystem({ roads, hour, onMetrics, onAccident, signalMapRef }: CarSystemProps) {
+export default function CarSystem({ roads, hour, onMetrics, onAccident, signalMapRef, hotspots = [] }: CarSystemProps) {
     const chassisRef = useRef<THREE.InstancedMesh>(null!);
     const cabinRef = useRef<THREE.InstancedMesh>(null!);
     const headLightsRef = useRef<THREE.InstancedMesh>(null!);
@@ -402,6 +416,20 @@ export default function CarSystem({ roads, hour, onMetrics, onAccident, signalMa
             }
             // ── End traffic light check ───────────────────────────────────
 
+            // ── Hotspot slowdown (accident prevention) ───────────────────
+            if (currentSpeed > 0 && hotspots.length > 0) {
+                const influenceSq = CONFIG.HOTSPOT_INFLUENCE_RADIUS * CONFIG.HOTSPOT_INFLUENCE_RADIUS;
+                for (const hs of hotspots) {
+                    const dx = hs.x - car.currentPos.x;
+                    const dz = hs.z - car.currentPos.z;
+                    if (dx * dx + dz * dz < influenceSq) {
+                        currentSpeed *= CONFIG.HOTSPOT_SPEED_PENALTY;
+                        break; // One hotspot hit is enough
+                    }
+                }
+            }
+            // ── End hotspot slowdown ──────────────────────────────────────
+
             const curveLen = curve.getLength();
             if (curveLen > 0.1) {
                 const progressSpeed = (currentSpeed * (0.2 + pf * 0.8)) / curveLen;
@@ -520,17 +548,18 @@ export default function CarSystem({ roads, hour, onMetrics, onAccident, signalMa
                     const dist = a.currentPos.distanceTo(b.currentPos);
                     if (dist < collDist) {
                         collidedPairsRef.current.add(pairId);
-                        // Mark both as exploded
                         a.isExploded = true;
                         b.isExploded = true;
                         const midpoint = new THREE.Vector3().addVectors(a.currentPos, b.currentPos).multiplyScalar(0.5);
+                        const bodily = Math.random() < 0.4; // 40% chance of bodily injury
                         onAccident({
                             id: pairId,
                             position: { x: midpoint.x, y: midpoint.y, z: midpoint.z },
                             plates: [a.plate, b.plate],
-                            bodily: Math.random() < 0.4, // 40% chance of bodily injury
+                            bodily,
                             timestamp: Date.now(),
                         });
+                        postAccident(midpoint.x, midpoint.z, bodily);
                     }
                 }
             }

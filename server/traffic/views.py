@@ -3,10 +3,11 @@ import math
 from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework import status
-from .models import RoadSegment, POI, TrafficSnapshot
+from .models import RoadSegment, POI, TrafficSnapshot, Accident
 from .serializers import (
     RoadSegmentSerializer, POISerializer,
     TrafficSnapshotSerializer, TrafficSnapshotIngestSerializer,
+    AccidentSerializer, AccidentReportSerializer,
 )
 from google import genai
 from google.genai import types
@@ -95,6 +96,73 @@ class ChatbotView(APIView):
             return Response({'response': response.text})
         except Exception as e:
             return Response({'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
+# Scene-unit radius used when grouping nearby accidents into a single hotspot.
+_CLUSTER_RADIUS = 30.0
+# Minimum number of accidents in a cluster for it to be flagged as a hotspot.
+_HOTSPOT_THRESHOLD = 2
+
+
+def _build_hotspots(accidents):
+    """Greedy O(n*k) clustering of accident records into danger-zone hotspots.
+
+    Returns a list of dicts: {x, z, count, bodily_count, severity}
+    Only clusters with count >= _HOTSPOT_THRESHOLD are returned so isolated
+    one-off accidents don't pollute the map.
+    """
+    clusters = []
+    for acc in accidents:
+        placed = False
+        for cluster in clusters:
+            dx = acc.scene_x - cluster["x"]
+            dz = acc.scene_z - cluster["z"]
+            if (dx * dx + dz * dz) ** 0.5 < _CLUSTER_RADIUS:
+                # Weighted centroid update
+                n = cluster["count"]
+                cluster["x"] = (cluster["x"] * n + acc.scene_x) / (n + 1)
+                cluster["z"] = (cluster["z"] * n + acc.scene_z) / (n + 1)
+                cluster["count"] += 1
+                if acc.bodily:
+                    cluster["bodily_count"] += 1
+                placed = True
+                break
+        if not placed:
+            clusters.append({
+                "x": acc.scene_x,
+                "z": acc.scene_z,
+                "count": 1,
+                "bodily_count": 1 if acc.bodily else 0,
+            })
+
+    result = []
+    for c in clusters:
+        if c["count"] < _HOTSPOT_THRESHOLD:
+            continue
+        c["severity"] = "high" if c["bodily_count"] > 0 else "medium"
+        result.append(c)
+    return result
+
+
+class AccidentView(APIView):
+    """
+    POST – record an accident event from the simulation.
+    GET  – return aggregated hotspots derived from recent accident history.
+    """
+
+    def post(self, request):
+        serializer = AccidentReportSerializer(data=request.data)
+        if not serializer.is_valid():
+            return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+        accident = Accident.objects.create(**serializer.validated_data)
+        return Response(AccidentSerializer(accident).data, status=status.HTTP_201_CREATED)
+
+    def get(self, request):
+        # Use the most recent 500 accidents to compute hotspots so the map
+        # stays relevant without an unbounded query.
+        recent = Accident.objects.all()[:500]
+        hotspots = _build_hotspots(list(recent))
+        return Response(hotspots)
 
 
 class TrafficStatsView(APIView):

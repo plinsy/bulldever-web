@@ -20,7 +20,7 @@ import * as THREE from "three";
 import RoadNetwork from "./RoadNetwork";
 import CarSystem, { TrafficMetrics } from "../simulation/CarSystem";
 import TrafficLightSystem from "./TrafficLightSystem";
-import type { AccidentEvent } from "../simulation/accidentTypes";
+import type { AccidentEvent, AccidentHotspot } from "../simulation/accidentTypes";
 import type { TrafficSignalMap } from "../simulation/trafficLightTypes";
 import AccidentMarkers from "./AccidentMarkers";
 import * as CONFIG from "../simulation/config";
@@ -165,15 +165,27 @@ interface SceneProps {
 function WorldContent({ hour, onRoadInfo, onLoadingChange, onMetrics, onAccident, accidents = [] }: SceneProps) {
   const { roads, loading: roadsLoading } = useOsmRoads();
   const { buildings, loading: bldgLoading } = useOsmBuildings();
-  // Combined loading state for HUD spinner
   const loading = roadsLoading && bldgLoading;
 
-  /** Shared mutable signal state – written by TrafficLightSystem, read by CarSystem. */
   const signalMapRef = useRef<TrafficSignalMap>(new Map());
+  const [hotspots, setHotspots] = useState<AccidentHotspot[]>([]);
 
   useEffect(() => {
     onLoadingChange?.(loading);
   }, [loading, onLoadingChange]);
+
+  // Fetch hotspots on mount then refresh every 30 s so the map stays current.
+  useEffect(() => {
+    const fetchHotspots = () => {
+      axios
+        .get(`${API_BASE}/accidents/`)
+        .then((res) => setHotspots(res.data))
+        .catch(() => {});
+    };
+    fetchHotspots();
+    const id = setInterval(fetchHotspots, 30_000);
+    return () => clearInterval(id);
+  }, []);
   const [trafficData, setTrafficData] = useState<Record<number, number>>({});
 
   useEffect(() => {
@@ -304,12 +316,13 @@ function WorldContent({ hour, onRoadInfo, onLoadingChange, onMetrics, onAccident
             onMetrics={onMetrics}
             onAccident={onAccident}
             signalMapRef={signalMapRef}
+            hotspots={hotspots}
           />
         </>
       )}
 
       {/* Accident visual markers */}
-      <AccidentMarkers accidents={accidents} />
+      <AccidentMarkers accidents={accidents} hotspots={hotspots} />
 
       {/* Helper */}
       <GizmoHelper alignment="bottom-right" margin={[80, 80]}>

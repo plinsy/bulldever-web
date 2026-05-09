@@ -81,6 +81,12 @@ export const TRAFFIC_LIGHT_STOP = 8.0;        // Hard-stop distance from interse
 export const TRAFFIC_LIGHT_INNER = 4.0;       // Radius inside which a car is considered "in" the intersection
 export const TRAFFIC_LIGHT_QUEUE_ZONE = 25.0; // Distance at which a stopped car is counted as "queued"
 
+// 13. Accident Hotspot Prevention
+/** Scene-unit radius within which a car slows to avoid a known danger zone. */
+export const HOTSPOT_INFLUENCE_RADIUS = 40.0;
+/** Speed multiplier applied when a car enters a hotspot zone (0–1). */
+export const HOTSPOT_SPEED_PENALTY = 0.45;
+
 // Signal timing (seconds)
 export const SIGNAL_BASE_GREEN = 15;
 export const SIGNAL_MIN_GREEN = 8;
