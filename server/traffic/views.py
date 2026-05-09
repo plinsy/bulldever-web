@@ -86,12 +86,16 @@ def get_traffic_stats(zone_id: str = None):
         return {"error": "Aucune donnée disponible."}
     
     if zone_id:
-        zone_data = latest.zone_counts.get(zone_id.lower(), {"total": 0, "stopped": 0})
+        val = latest.zone_counts.get(zone_id.lower(), 0)
+        # Handle both integer (stopped count) and dict format
+        stopped = val.get("stopped", 0) if isinstance(val, dict) else val
+        total = val.get("total", 0) if isinstance(val, dict) else "N/A"
+        
         return {
             "zone": zone_id,
-            "total_cars": zone_data.get("total", 0),
-            "stopped_cars": zone_data.get("stopped", 0),
-            "congestion_level": f"{round((zone_data.get('stopped', 0) / zone_data.get('total', 1)) * 100)}%" if zone_data.get("total", 0) > 0 else "0%"
+            "total_cars": total,
+            "stopped_cars": stopped,
+            "congestion_level": f"{round((stopped / total) * 100)}%" if isinstance(total, int) and total > 0 else "N/A"
         }
     
     return {
@@ -112,8 +116,9 @@ def predict_zone_congestion(zone_id: str):
     # Simple logic: is it increasing?
     vals = []
     for s in snapshots:
-        z = s.zone_counts.get(zone_id.lower(), {"stopped": 0})
-        vals.append(z.get("stopped", 0))
+        val = s.zone_counts.get(zone_id.lower(), 0)
+        stopped = val.get("stopped", 0) if isinstance(val, dict) else val
+        vals.append(stopped)
     
     trend = "en augmentation" if vals[0] > vals[-1] else "en diminution" if vals[0] < vals[-1] else "stable"
     return {
@@ -154,10 +159,7 @@ class ChatbotView(APIView):
             # Automatic Function Calling configuration
             generate_content_config = types.GenerateContentConfig(
                 system_instruction=system_instruction,
-                tools=[get_traffic_stats, predict_zone_congestion, types.Tool(google_search=types.GoogleSearch())],
-                tool_config=types.ToolConfig(
-                    include_server_side_tool_invocations=True
-                )
+                tools=[get_traffic_stats, predict_zone_congestion]
             )
             
             response = client.models.generate_content(
