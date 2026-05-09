@@ -5,7 +5,7 @@ import { OrbitControls, PerspectiveCamera, Sky, GizmoHelper, GizmoViewport, Star
 import { Suspense, useState, useEffect, useCallback, useMemo, useRef } from "react";
 import * as THREE from "three";
 import RoadNetwork from "./RoadNetwork";
-import CarSystem from "../simulation/CarSystem";
+import CarSystem, { TrafficMetrics } from "../simulation/CarSystem";
 import { useOsmRoads, useOsmBuildings, OsmRoad, OsmBuilding, METER } from "./geo";
 import axios from "axios";
 
@@ -123,9 +123,10 @@ interface SceneProps {
     hour: number;
     onRoadInfo: (info: string) => void;
     onLoadingChange?: (loading: boolean) => void;
+    onMetrics?: (metrics: TrafficMetrics) => void;
 }
 
-function WorldContent({ hour, onRoadInfo, onLoadingChange }: SceneProps) {
+function WorldContent({ hour, onRoadInfo, onLoadingChange, onMetrics }: SceneProps) {
     const { roads, loading: roadsLoading } = useOsmRoads();
     const { buildings, loading: bldgLoading } = useOsmBuildings();
     // Combined loading state for HUD spinner
@@ -213,7 +214,7 @@ function WorldContent({ hour, onRoadInfo, onLoadingChange }: SceneProps) {
 
             {/* Vehicles — only once roads are ready */}
             {!roadsLoading && roads.length > 0 && (
-                <CarSystem roads={roads} hour={hour} />
+                <CarSystem roads={roads} hour={hour} onMetrics={onMetrics} />
             )}
 
             {/* Helper */}
@@ -240,7 +241,7 @@ export default function Scene({ hour, onRoadInfo, onLoadingChange }: SceneProps)
                     target={[0, 0, 0]}
                 />
                 <Suspense fallback={null}>
-                    <WorldContent hour={hour} onRoadInfo={onRoadInfo} onLoadingChange={onLoadingChange} />
+                    <WorldContent hour={hour} onRoadInfo={onRoadInfo} onLoadingChange={onLoadingChange} onMetrics={onMetrics} />
                 </Suspense>
             </Canvas>
         </div>

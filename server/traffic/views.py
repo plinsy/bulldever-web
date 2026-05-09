@@ -3,8 +3,11 @@ import math
 from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework import status
-from .models import RoadSegment, POI
-from .serializers import RoadSegmentSerializer, POISerializer
+from .models import RoadSegment, POI, TrafficSnapshot
+from .serializers import (
+    RoadSegmentSerializer, POISerializer,
+    TrafficSnapshotSerializer, TrafficSnapshotIngestSerializer,
+)
 from google import genai
 from google.genai import types
 import os
@@ -92,3 +95,27 @@ class ChatbotView(APIView):
             return Response({'response': response.text})
         except Exception as e:
             return Response({'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
+class TrafficStatsView(APIView):
+    """
+    POST  – ingest a simulation snapshot from the frontend.
+    GET   – return the latest N snapshots (default 20) for dashboards.
+    """
+
+    def post(self, request):
+        serializer = TrafficSnapshotIngestSerializer(data=request.data)
+        if not serializer.is_valid():
+            return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+        snapshot = TrafficSnapshot.objects.create(**serializer.validated_data)
+        return Response(
+            TrafficSnapshotSerializer(snapshot).data,
+            status=status.HTTP_201_CREATED,
+        )
+
+    def get(self, request):
+        limit = min(int(request.query_params.get("limit", 20)), 200)
+        snapshots = TrafficSnapshot.objects.all()[:limit]
+        serializer = TrafficSnapshotSerializer(snapshots, many=True)
+        return Response(serializer.data)
