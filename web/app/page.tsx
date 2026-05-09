@@ -5,7 +5,9 @@ import Scene from "@/components/world/Scene";
 import HUD from "@/components/ui/HUD";
 import ChatbotUI from "@/components/ui/ChatbotUI";
 import TrafficStatsPanel from "@/components/ui/TrafficStatsPanel";
+import AccidentPanel from "@/components/ui/AccidentPanel";
 import type { TrafficMetrics } from "@/components/simulation/CarSystem";
+import type { AccidentEvent } from "@/components/simulation/accidentTypes";
 
 export default function Home() {
     const [hour, setHour] = useState(8);
@@ -13,9 +15,21 @@ export default function Home() {
     const [roadInfo, setRoadInfo] = useState<string | null>(null);
     const [isLoading, setIsLoading] = useState(true);
     const [metrics, setMetrics] = useState<TrafficMetrics | null>(null);
+    const [accidents, setAccidents] = useState<AccidentEvent[]>([]);
 
     const handleLoadingChange = useCallback((loading: boolean) => {
         setIsLoading(loading);
+    }, []);
+
+    const handleAccident = useCallback((event: AccidentEvent) => {
+        setAccidents((prev) => {
+            if (prev.some((a) => a.id === event.id)) return prev;
+            return [event, ...prev];
+        });
+    }, []);
+
+    const handleDismiss = useCallback((id: string) => {
+        setAccidents((prev) => prev.filter((a) => a.id !== id));
     }, []);
 
     return (
@@ -25,6 +39,8 @@ export default function Home() {
                 onRoadInfo={setRoadInfo}
                 onLoadingChange={handleLoadingChange}
                 onMetrics={setMetrics}
+                onAccident={handleAccident}
+                accidents={accidents}
             />
 
             {/* Road info popup */}
@@ -61,6 +77,8 @@ export default function Home() {
                 isOpen={isChatOpen}
                 onClose={() => setIsChatOpen(false)}
             />
+
+            <AccidentPanel accidents={accidents} onDismiss={handleDismiss} />
         </main>
     );
 }

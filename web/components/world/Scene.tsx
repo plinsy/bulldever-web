@@ -14,6 +14,7 @@ import {
   useEffect,
   useCallback,
   useMemo,
+  useRef
 } from "react";
 import * as THREE from "three";
 import { 
@@ -25,6 +26,10 @@ import {
 } from "lucide-react";
 import RoadNetwork from "./RoadNetwork";
 import CarSystem, { TrafficMetrics } from "../simulation/CarSystem";
+import TrafficLightSystem from "./TrafficLightSystem";
+import type { AccidentEvent } from "../simulation/accidentTypes";
+import type { TrafficSignalMap } from "../simulation/trafficLightTypes";
+import AccidentMarkers from "./AccidentMarkers";
 import {
   useOsmRoads,
   useOsmBuildings,
@@ -128,19 +133,24 @@ interface SceneProps {
   onRoadInfo: (info: string) => void;
   onLoadingChange?: (loading: boolean) => void;
   onMetrics?: (metrics: TrafficMetrics) => void;
+  onAccident?: (event: AccidentEvent) => void;
+  accidents?: AccidentEvent[];
 }
 
 interface WorldContentProps extends SceneProps {
     center: LatLng;
 }
 
-function WorldContent({ hour, onRoadInfo, onLoadingChange, onMetrics, center }: WorldContentProps) {
+function WorldContent({ hour, onRoadInfo, onLoadingChange, onMetrics, onAccident, accidents = [], center }: WorldContentProps) {
   const { roads, loading: roadsLoading } = useOsmRoads(center);
   const { buildings, loading: bldgLoading } = useOsmBuildings(center);
   const [trafficData, setTrafficData] = useState<Record<number, number>>({});
   const [jammedRoads, setJammedRoads] = useState<Record<string, { fwd: boolean, bwd: boolean }>>({});
 
   const loading = roadsLoading && bldgLoading;
+
+  /** Shared mutable signal state – written by TrafficLightSystem, read by CarSystem. */
+  const signalMapRef = useRef<TrafficSignalMap>(new Map());
 
   useEffect(() => {
     onLoadingChange?.(loading);
@@ -155,7 +165,7 @@ function WorldContent({ hour, onRoadInfo, onLoadingChange, onMetrics, center }: 
         setTrafficData(map);
       })
       .catch(() => {});
-  }, [hour]);
+  }, [hour, center]); // Re-fetch on center change
 
   const handleRoadClick = useCallback(
     (road: OsmRoad, density: number) => {
@@ -193,9 +203,44 @@ function WorldContent({ hour, onRoadInfo, onLoadingChange, onMetrics, center }: 
         />
       )}
 
+      {/* Night street lights */}
+      {(hour < 6 || hour > 18) &&
+        [
+          [10, 0],
+          [-10, 5],
+          [5, -15],
+          [-5, 20],
+          [20, -10],
+          [-20, 10],
+        ].map(([x, z], i) => (
+          <pointLight
+            key={i}
+            position={[x, 4, z]}
+            intensity={0.6}
+            distance={20}
+            color="#ff9d4d"
+          />
+        ))}
+
+      {/* Traffic lights + vehicles — only once roads are ready.
+          TrafficLightSystem must render before CarSystem so its useFrame
+          runs first and advances phase timers before CarSystem reads them. */}
       {!roadsLoading && roads.length > 0 && (
-        <CarSystem roads={roads} hour={hour} onMetrics={handleMetrics} center={center} />
+        <>
+          <TrafficLightSystem roads={roads} signalMapRef={signalMapRef} center={center} />
+          <CarSystem
+            roads={roads}
+            hour={hour}
+            onMetrics={handleMetrics}
+            onAccident={onAccident}
+            signalMapRef={signalMapRef}
+            center={center}
+          />
+        </>
       )}
+
+      {/* Accident visual markers */}
+      <AccidentMarkers accidents={accidents} />
 
       <OrbitControls makeDefault />
       <GizmoHelper alignment="bottom-right" margin={[80, 80]}>

@@ -19,10 +19,12 @@ export const TRAFFIC_SPEED_MAX = 0.045;
 export const TURN_SPEED_MULTIPLIER = 3.0; // How fast cars move during intersection transitions
 
 // 4. Collision & Radar (in Meters)
-export const RADAR_DISTANCE = 20.0; // Max distance radar can see
-export const SAFE_GAP = 6.0;        // Distance to stop completely
-export const SLOW_GAP = 15.0;       // Distance to start slowing down
-export const RADAR_CONE_DOT = 0.85;  // Focus of the radar (0.85 = ~30 degrees)
+export const RADAR_DISTANCE = 20.0;    // Max distance radar can see
+export const SAFE_GAP = 6.0;          // Distance to stop completely
+export const SLOW_GAP = 15.0;         // Distance to start slowing down
+export const RADAR_CONE_DOT = 0.85;   // Focus of the radar (0.85 = ~30 degrees)
+export const COLLISION_DISTANCE = 3.5; // Distance (m) at which a collision is registered
+export const ACCIDENT_GRACE_FRAMES = 120; // Frames to wait before enabling collision detection
 
 // 5. Congestion & Detection
 export const JAM_CAR_COUNT = 4;      // Number of stopped cars to mark a road as "Jammed" (Red)
@@ -76,4 +78,17 @@ export const ROAD_WIDTH_METERS: Record<string, number> = {
     service: 3.5,
     unclassified: 4.5,
 };
+
+// 12. Traffic Lights (in Meters)
+export const TRAFFIC_LIGHT_APPROACH = 30.0;   // Distance at which a car starts checking the signal
+export const TRAFFIC_LIGHT_STOP = 8.0;        // Hard-stop distance from intersection centre
+export const TRAFFIC_LIGHT_INNER = 4.0;       // Radius inside which a car is considered "in" the intersection
+export const TRAFFIC_LIGHT_QUEUE_ZONE = 25.0; // Distance at which a stopped car is counted as "queued"
+
+// Signal timing (seconds)
+export const SIGNAL_BASE_GREEN = 15;
+export const SIGNAL_MIN_GREEN = 8;
+export const SIGNAL_MAX_GREEN = 40;
+export const SIGNAL_YELLOW_DUR = 2.5;
+export const SIGNAL_QUEUE_WEIGHT = 1.5; // Extra green seconds granted per queued car
 
