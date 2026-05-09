@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import * as THREE from "three";
 import * as BufferGeometryUtils from "three/examples/jsm/utils/BufferGeometryUtils.js";
 import { OsmRoad, CENTER, ROAD_WIDTHS } from "../world/geo";
@@ -8,6 +8,9 @@ import { classifyZone } from "./zones";
 import { useFrame } from "@react-three/fiber";
 import { Html } from "@react-three/drei";
 import * as CONFIG from "./config";
+import type { AccidentEvent } from "./accidentTypes";
+
+export type { AccidentEvent };
 
 const METER = CONFIG.METER;
 const CAR_COLORS = CONFIG.CAR_COLORS.map(c => new THREE.Color(c));
@@ -41,6 +44,18 @@ interface CarSystemProps {
     hour: number;
     /** Called every frame with updated metrics */
     onMetrics?: (metrics: TrafficMetrics) => void;
+    /** Called once per detected collision with the accident details */
+    onAccident?: (event: AccidentEvent) => void;
+}
+
+/** Generate a Madagascar-style license plate: "AB 1234" or "TAM 5678" */
+function generatePlate(): string {
+    const chars = "ABCDEFGHJKLMNPRSTUVWXY";
+    const len = Math.random() > 0.5 ? 2 : 3;
+    let prefix = "";
+    for (let i = 0; i < len; i++) prefix += chars[Math.floor(Math.random() * chars.length)];
+    const digits = String(Math.floor(Math.random() * 9000) + 1000);
+    return `${prefix} ${digits}`;
 }
 
 function roadXZ(road: OsmRoad) {
@@ -111,7 +126,7 @@ async function postSnapshot(metrics: TrafficMetrics, hour: number): Promise<void
     }
 }
 
-export default function CarSystem({ roads, hour, onMetrics }: CarSystemProps) {
+export default function CarSystem({ roads, hour, onMetrics, onAccident }: CarSystemProps) {
     const chassisRef = useRef<THREE.InstancedMesh>(null!);
     const cabinRef = useRef<THREE.InstancedMesh>(null!);
     const headLightsRef = useRef<THREE.InstancedMesh>(null!);
@@ -121,6 +136,8 @@ export default function CarSystem({ roads, hour, onMetrics }: CarSystemProps) {
 
     const lastSnapshotRef = useRef<number>(0);
     const [selectedIdx, setSelectedIdx] = useState<number | null>(null);
+    const collidedPairsRef = useRef<Set<string>>(new Set());
+    const frameCountRef = useRef<number>(0);
 
     const intersections = useMemo(() => deriveIntersections(roads), [roads]);
 
@@ -213,7 +230,8 @@ export default function CarSystem({ roads, hour, onMetrics }: CarSystemProps) {
                     speed: 0.02 + Math.random() * 0.03,
                     delay: Math.random() * 2
                 })),
-                currentActualSpeed: 0
+                currentActualSpeed: 0,
+                plate: generatePlate(),
             };
         });
     }, [roads]);
@@ -434,6 +452,37 @@ export default function CarSystem({ roads, hour, onMetrics }: CarSystemProps) {
         tailLightsRef.current.instanceMatrix.needsUpdate = true;
         wheelRef.current.instanceMatrix.needsUpdate = true;
         smokeRef.current.instanceMatrix.needsUpdate = true;
+
+        // --- Accident / Collision detection ---
+        frameCountRef.current++;
+        if (frameCountRef.current > CONFIG.ACCIDENT_GRACE_FRAMES && onAccident) {
+            const collDist = CONFIG.COLLISION_DISTANCE * METER;
+            for (let i = 0; i < carState.length; i++) {
+                const a = carState[i];
+                if (!a.initialized) continue;
+                for (let j = i + 1; j < carState.length; j++) {
+                    const b = carState[j];
+                    if (!b.initialized) continue;
+                    const pairId = `${i}-${j}`;
+                    if (collidedPairsRef.current.has(pairId)) continue;
+                    const dist = a.currentPos.distanceTo(b.currentPos);
+                    if (dist < collDist) {
+                        collidedPairsRef.current.add(pairId);
+                        // Mark both as exploded
+                        a.isExploded = true;
+                        b.isExploded = true;
+                        const midpoint = new THREE.Vector3().addVectors(a.currentPos, b.currentPos).multiplyScalar(0.5);
+                        onAccident({
+                            id: pairId,
+                            position: { x: midpoint.x, y: midpoint.y, z: midpoint.z },
+                            plates: [a.plate, b.plate],
+                            bodily: Math.random() < 0.4, // 40% chance of bodily injury
+                            timestamp: Date.now(),
+                        });
+                    }
+                }
+            }
+        }
 
         const avgSceneSpeed = carState.length > 0 ? speedSum / carState.length : 0;
         const metrics: TrafficMetrics = {

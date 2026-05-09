@@ -19,10 +19,12 @@ export const TRAFFIC_SPEED_MAX = 0.015;
 export const TURN_SPEED_MULTIPLIER = 3.0; // How fast cars move during intersection transitions
 
 // 4. Collision & Radar (in Meters)
-export const RADAR_DISTANCE = 20.0; // Max distance radar can see
-export const SAFE_GAP = 6.0;        // Distance to stop completely
-export const SLOW_GAP = 15.0;       // Distance to start slowing down
-export const RADAR_CONE_DOT = 0.85;  // Focus of the radar (0.85 = ~30 degrees)
+export const RADAR_DISTANCE = 20.0;    // Max distance radar can see
+export const SAFE_GAP = 6.0;          // Distance to stop completely
+export const SLOW_GAP = 15.0;         // Distance to start slowing down
+export const RADAR_CONE_DOT = 0.85;   // Focus of the radar (0.85 = ~30 degrees)
+export const COLLISION_DISTANCE = 3.5; // Distance (m) at which a collision is registered
+export const ACCIDENT_GRACE_FRAMES = 120; // Frames to wait before enabling collision detection
 
 // 5. Intersection Logic
 export const INTERSECTION_THRESH = 0.00012; // Connectivity threshold (higher = more connections)
