@@ -81,21 +81,37 @@ function BuildingMesh({ b, color }: { b: OsmBuilding; color: string }) {
       if (b.points.length < 3) return new THREE.BufferGeometry();
 
       // Remove consecutive duplicate points which can crash the Extrude/Earcut algorithm
-      const cleanPts = b.points.filter((p, i, arr) => {
+      let cleanPts = b.points.filter((p, i, arr) => {
         if (i === 0) return true;
         const prev = arr[i - 1];
         return (
-          Math.abs(p.x - prev.x) > 0.00001 || Math.abs(p.z - prev.z) > 0.00001
+          Math.abs(p.x - prev.x) > 0.001 || Math.abs(p.z - prev.z) > 0.001
         );
       });
+      
+      // Remove last point if it's the same as the first (OSM ways are often closed)
+      if (cleanPts.length > 1) {
+        const first = cleanPts[0];
+        const last = cleanPts[cleanPts.length - 1];
+        if (Math.abs(first.x - last.x) < 0.001 && Math.abs(first.z - last.z) < 0.001) {
+          cleanPts.pop();
+        }
+      }
+
       if (cleanPts.length < 3) return new THREE.BufferGeometry();
+
+      // Ensure counter-clockwise winding order so normals point OUTWARD.
+      // If clockwise, the building is inside-out (we only see the bottom face Z-fighting the ground).
+      const vec2s = cleanPts.map(p => new THREE.Vector2(p.x, -p.z));
+      if (THREE.ShapeUtils.isClockWise(vec2s)) {
+        cleanPts.reverse();
+      }
 
       const shape = new THREE.Shape();
       shape.moveTo(cleanPts[0].x, -cleanPts[0].z);
       for (let i = 1; i < cleanPts.length; i++) {
         shape.lineTo(cleanPts[i].x, -cleanPts[i].z);
       }
-      shape.lineTo(cleanPts[0].x, -cleanPts[0].z);
 
       const height = b.levels * 3.0 * METER; // 3m per level properly scaled to scene units
       const geometry = new THREE.ExtrudeGeometry(shape, {
@@ -213,6 +229,7 @@ function WorldContent({ hour, onRoadInfo, onLoadingChange }: SceneProps) {
         shadow-camera-right={100}
         shadow-camera-top={100}
         shadow-camera-bottom={-100}
+        shadow-bias={-0.001}
         color="#fffaed"
       />
       {/* Fill light from the opposite side */}

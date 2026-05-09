@@ -99,6 +99,9 @@ export default function CarSystem({ roads, hour }: CarSystemProps) {
                 baseSpeed,
                 laneOffset: ((Math.random() - 0.5) * 2.0) * METER, // +/- 1 meter offset
                 colorIdx: Math.floor(Math.random() * CAR_COLORS.length),
+                currentPos: new THREE.Vector3(),
+                currentLookAt: new THREE.Vector3(),
+                initialized: false,
             };
         });
     }, [roads]);
@@ -121,16 +124,34 @@ export default function CarSystem({ roads, hour }: CarSystemProps) {
             const curve = roadCurves[car.roadIdx];
             if (!curve) return;
 
-            // 1. Traffic Jam Logic: Check for cars in front using true physical distance
+            // 1. Radar Collision Logic: Check physical 3D distance to all other cars
+            // This prevents overlapping even at intersections when cars cross paths!
             let minDistanceInFront = Infinity;
-            const roadLen = curve.getLength();
 
             carState.forEach((otherCar, j) => {
-                if (i !== j && otherCar.roadIdx === car.roadIdx && otherCar.direction === car.direction) {
-                    const progressDist = (otherCar.progress - car.progress) * car.direction;
-                    if (progressDist > 0 && progressDist < 0.5) {
-                        const physDist = progressDist * roadLen; // True distance in scene units
-                        minDistanceInFront = Math.min(minDistanceInFront, physDist);
+                if (i === j || !otherCar.initialized || !car.initialized) return;
+
+                // Ignore oncoming traffic on the exact same road
+                if (otherCar.roadIdx === car.roadIdx && otherCar.direction !== car.direction) {
+                    return;
+                }
+
+                const toOther = new THREE.Vector3().subVectors(otherCar.currentPos, car.currentPos);
+                const dist = toOther.length();
+
+                // If other car is physically close (within ~20 meters)
+                if (dist < 20.0 * METER) {
+                    toOther.normalize();
+                    
+                    const curveT = Math.max(0, Math.min(1, car.progress));
+                    const fwd = curve.getTangentAt(curveT);
+                    if (car.direction === -1) fwd.negate();
+
+                    const dot = fwd.dot(toOther);
+                    
+                    // If the other car is in our forward "cone" (dot > 0.85 is ~31 degrees)
+                    if (dot > 0.85) {
+                        minDistanceInFront = Math.min(minDistanceInFront, dist);
                     }
                 }
             });
@@ -176,8 +197,22 @@ export default function CarSystem({ roads, hour }: CarSystemProps) {
             const side = new THREE.Vector3(-forward.z, 0, forward.x).normalize().multiplyScalar(car.laneOffset);
 
             const yOffset = 0.02 + (1.5 * METER) / 2; // Road surface + half car height
-            dummy.position.set(pos.x + side.x, yOffset, pos.z + side.z);
-            dummy.lookAt(pos.x + side.x + forward.x, yOffset, pos.z + side.z + forward.z);
+            const targetPos = new THREE.Vector3(pos.x + side.x, yOffset, pos.z + side.z);
+            const targetLookAt = new THREE.Vector3(targetPos.x + forward.x, yOffset, targetPos.z + forward.z);
+
+            if (!car.initialized) {
+                car.currentPos.copy(targetPos);
+                car.currentLookAt.copy(targetLookAt);
+                car.initialized = true;
+            } else {
+                // Smoothly interpolate! This completely hides the "teleport" at intersections
+                // because the car will smoothly "drift" into the new lane instead of snapping instantly.
+                car.currentPos.lerp(targetPos, 0.15);
+                car.currentLookAt.lerp(targetLookAt, 0.15);
+            }
+
+            dummy.position.copy(car.currentPos);
+            dummy.lookAt(car.currentLookAt);
             dummy.updateMatrix();
             meshRef.current.setMatrixAt(i, dummy.matrix);
 

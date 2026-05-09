@@ -8,8 +8,11 @@ export const CENTER = { lat: -18.9137, lng: 47.5361 };
 export const SCALE = 8000;
 export const METER = SCALE / 111320; // 1 scene unit = ~13.9 meters, so 1 meter = 0.0718 scene units
 
-// Bounding box: ~3km radius
-const BBOX = `${CENTER.lat - 0.03},${CENTER.lng - 0.04},${CENTER.lat + 0.03},${CENTER.lng + 0.04}`;
+// Bounding box for roads: ~3km radius
+const ROAD_BBOX = `${CENTER.lat - 0.03},${CENTER.lng - 0.04},${CENTER.lat + 0.03},${CENTER.lng + 0.04}`;
+
+// Bounding box for buildings: ~1km radius (reduced to avoid rendering too many buildings)
+const BUILDING_BBOX = `${CENTER.lat - 0.01},${CENTER.lng - 0.015},${CENTER.lat + 0.01},${CENTER.lng + 0.015}`;
 
 export function latLngToXZ(lat: number, lng: number) {
     const x = (lng - CENTER.lng) * SCALE;
@@ -30,7 +33,7 @@ const ROAD_QUERY = `
 [out:json][timeout:30];
 (
   way["highway"~"^(motorway|trunk|primary|secondary|tertiary|residential|unclassified|service)$"]
-    (${BBOX});
+    (${ROAD_BBOX});
 );
 out body;
 >;
@@ -90,7 +93,7 @@ const BUILDING_QUERY = `
 [out:json][timeout:30];
 (
   way["building"]
-    (${BBOX});
+    (${BUILDING_BBOX});
 );
 out body;
 >;
