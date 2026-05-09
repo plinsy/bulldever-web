@@ -7,9 +7,10 @@ interface HUDProps {
     setHour: (h: number) => void;
     toggleChat: () => void;
     isLoading?: boolean;
+    retryAttempt?: number;
 }
 
-export default function HUD({ hour, setHour, toggleChat, isLoading }: HUDProps) {
+export default function HUD({ hour, setHour, toggleChat, isLoading, retryAttempt = 0 }: HUDProps) {
     const timeLabel = `${hour.toString().padStart(2, '0')}:00`;
     const peakLabel =
         (hour >= 7 && hour <= 9) ? "🔴 Heure de pointe (matin)"
@@ -34,7 +35,9 @@ export default function HUD({ hour, setHour, toggleChat, isLoading }: HUDProps) 
                     {isLoading && (
                         <div className="flex items-center gap-2 mt-2 text-blue-400 text-xs">
                             <Loader2 size={12} className="animate-spin" />
-                            Chargement du réseau routier…
+                            {retryAttempt > 1
+                                ? `Nouvelle tentative ${retryAttempt}…`
+                                : "Chargement du réseau routier…"}
                         </div>
                     )}
                 </div>

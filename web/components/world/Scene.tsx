@@ -1,12 +1,12 @@
 "use client";
 
-import { Canvas } from "@react-three/fiber";
+import { Canvas, useFrame } from "@react-three/fiber";
 import { OrbitControls, PerspectiveCamera, Sky, GizmoHelper, GizmoViewport, Stars } from "@react-three/drei";
-import { Suspense, useState, useEffect, useCallback } from "react";
+import { Suspense, useState, useEffect, useCallback, useMemo, useRef } from "react";
 import * as THREE from "three";
 import RoadNetwork from "./RoadNetwork";
 import CarSystem from "../simulation/CarSystem";
-import { useOsmRoads, OsmRoad } from "./geo";
+import { useOsmRoads, useOsmBuildings, OsmRoad, OsmBuilding, METER } from "./geo";
 import axios from "axios";
 
 const API_BASE = "http://localhost:8000/api";
@@ -35,35 +35,85 @@ function Ground() {
     );
 }
 
-function Buildings() {
-    const buildings = [];
-    const rng = (seed: number) => {
-        const x = Math.sin(seed) * 10000;
-        return x - Math.floor(x);
-    };
+// Madagascar-style building palette: terracotta, sand, ochre, whitewash
+const BUILDING_COLORS = [
+    "#c9a882", "#d4a96a", "#c8b89a", "#b5835a",
+    "#e8d5b0", "#c4a882", "#d9c5a0", "#b8926a",
+];
 
-    for (let i = 0; i < 150; i++) {
-        const x = (rng(i * 7.1) - 0.5) * 90;
-        const z = (rng(i * 3.7) - 0.5) * 90;
-        const h = 2 + rng(i * 1.3) * 18;
-        const w = 1.5 + rng(i * 2.9) * 4;
-        const d = 1.5 + rng(i * 5.1) * 4;
-        const isDowntown = Math.abs(x) < 25 && Math.abs(z) < 25;
-        // Warm Madagascar tones: terracotta, sand, cream
-        const hue = isDowntown ? 200 + rng(i) * 30 : 20 + rng(i) * 40;
-        const sat = isDowntown ? 10 : 25 + rng(i * 2) * 20;
-        const lit = isDowntown ? 20 + rng(i * 4) * 15 : 35 + rng(i * 4) * 20;
-        const color = `hsl(${hue}, ${sat}%, ${lit}%)`;
-        buildings.push({ x, z, h, w, d, color });
-    }
+function BuildingMesh({ b, color }: { b: OsmBuilding; color: string }) {
+    const meshRef = useRef<THREE.Mesh>(null!);
 
+    const center = useMemo(() => {
+        if (!b.points.length) return { x: 0, z: 0 };
+        let cx = 0, cz = 0;
+        b.points.forEach(p => { cx += p.x; cz += p.z; });
+        return { x: cx / b.points.length, z: cz / b.points.length };
+    }, [b.points]);
+
+    const geo = useMemo(() => {
+        try {
+            if (b.points.length < 3) return new THREE.BufferGeometry();
+            
+            // Remove consecutive duplicate points which can crash the Extrude/Earcut algorithm
+            const cleanPts = b.points.filter((p, i, arr) => {
+                if (i === 0) return true;
+                const prev = arr[i - 1];
+                return Math.abs(p.x - prev.x) > 0.00001 || Math.abs(p.z - prev.z) > 0.00001;
+            });
+            if (cleanPts.length < 3) return new THREE.BufferGeometry();
+
+            const shape = new THREE.Shape();
+            shape.moveTo(cleanPts[0].x, -cleanPts[0].z);
+            for (let i = 1; i < cleanPts.length; i++) {
+                shape.lineTo(cleanPts[i].x, -cleanPts[i].z);
+            }
+            shape.lineTo(cleanPts[0].x, -cleanPts[0].z);
+
+            const height = b.levels * 3.0 * METER; // 3m per level properly scaled to scene units
+            const geometry = new THREE.ExtrudeGeometry(shape, {
+                depth: height,
+                bevelEnabled: false,
+            });
+            
+            geometry.rotateX(-Math.PI / 2);
+            geometry.computeVertexNormals();
+            return geometry;
+        } catch (err) {
+            console.warn("Failed to generate geometry for building", b.id);
+            return new THREE.BufferGeometry();
+        }
+    }, [b]);
+
+    // Distance Culling: Only render the building if the camera is near
+    // This saves thousands of draw calls and drastically improves FPS
+    useFrame((state) => {
+        if (!meshRef.current) return;
+        const dx = state.camera.position.x - center.x;
+        const dz = state.camera.position.z - center.z;
+        const distSq = dx * dx + dz * dz;
+        // The camera can be far back (e.g. z=80), so we need a large enough radius.
+        // 40000 = 200 units squared (~2.7km)
+        meshRef.current.visible = distSq < 40000;
+    });
+
+    return (
+        <mesh ref={meshRef} geometry={geo} castShadow receiveShadow>
+            <meshStandardMaterial color={color} roughness={0.85} metalness={0.02} />
+        </mesh>
+    );
+}
+
+function OsmBuildings({ buildings }: { buildings: OsmBuilding[] }) {
+    if (!buildings.length) return null;
     return (
         <group>
             {buildings.map((b, i) => (
-                <mesh key={i} position={[b.x, b.h / 2, b.z]} castShadow receiveShadow>
-                    <boxGeometry args={[b.w, b.h, b.d]} />
-                    <meshStandardMaterial color={b.color} roughness={0.75} metalness={0.05} />
-                </mesh>
+                <BuildingMesh
+                    key={b.id}
+                    b={b}
+                    color={BUILDING_COLORS[i % BUILDING_COLORS.length]}
+                />
             ))}
         </group>
     );
@@ -76,7 +126,10 @@ interface SceneProps {
 }
 
 function WorldContent({ hour, onRoadInfo, onLoadingChange }: SceneProps) {
-    const { roads, loading } = useOsmRoads();
+    const { roads, loading: roadsLoading } = useOsmRoads();
+    const { buildings, loading: bldgLoading } = useOsmBuildings();
+    // Combined loading state for HUD spinner
+    const loading = roadsLoading && bldgLoading;
 
     useEffect(() => {
         onLoadingChange?.(loading);
@@ -132,18 +185,18 @@ function WorldContent({ hour, onRoadInfo, onLoadingChange }: SceneProps) {
 
             {/* World */}
             <Ground />
-            <Buildings />
+            <OsmBuildings buildings={buildings} />
 
-            {/* Loading indicator */}
+            {/* Loading indicator: spinning sphere when waiting for OSM data */}
             {loading && (
                 <mesh position={[0, 5, 0]}>
                     <sphereGeometry args={[1]} />
-                    <meshStandardMaterial color="#3b82f6" emissive="#3b82f6" />
+                    <meshStandardMaterial color="#3b82f6" emissive="#3b82f6" emissiveIntensity={1} />
                 </mesh>
             )}
 
-            {/* Real OSM roads */}
-            {!loading && (
+            {/* Real OSM roads — show as soon as roads data arrives */}
+            {!roadsLoading && (
                 <RoadNetwork
                     roads={roads}
                     trafficData={trafficData}
@@ -158,8 +211,8 @@ function WorldContent({ hour, onRoadInfo, onLoadingChange }: SceneProps) {
                 <pointLight key={i} position={[x, 4, z]} intensity={0.6} distance={20} color="#ff9d4d" />
             ))}
 
-            {/* Vehicles */}
-            {!loading && roads.length > 0 && (
+            {/* Vehicles — only once roads are ready */}
+            {!roadsLoading && roads.length > 0 && (
                 <CarSystem roads={roads} hour={hour} />
             )}
 
