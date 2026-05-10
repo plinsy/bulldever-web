@@ -16,16 +16,7 @@ function zoneStatusClass(stoppedPct: number): string {
     return "badge-success";
 }
 
-const STATIC_ZONES = [
-    { id: "analakely",   label: "Analakely" },
-    { id: "anosizato",   label: "Anosizato" },
-    { id: "isotry",      label: "Isotry" },
-    { id: "67ha",        label: "67 Ha" },
-    { id: "ambohijatovo",label: "Ambohijatovo" },
-    { id: "tsaralalana", label: "Tsaralalana" },
-    { id: "ankorondrano",label: "Ankorondrano" },
-    { id: "behoririka",  label: "Behoririka" },
-];
+
 
 export default function TrafficStatsPanel({ metrics }: TrafficStatsPanelProps) {
     const [alerts, setAlerts] = useState<any[]>([]);
@@ -49,10 +40,11 @@ export default function TrafficStatsPanel({ metrics }: TrafficStatsPanelProps) {
     const stoppedPct = metrics.totalCars > 0 ? Math.round((metrics.stoppedCars / metrics.totalCars) * 100) : 0;
     const congestionStatus = stoppedPct > 40 ? "text-error" : stoppedPct > 20 ? "text-warning" : "text-success";
 
-    const zoneRows = STATIC_ZONES.map((zone) => {
-        const stat = metrics.zoneStats[zone.id] ?? { total: 0, stopped: 0 };
+    const zoneRows = Object.entries(metrics.zoneStats).map(([id, stat]) => {
+        // Format ID to a readable label (e.g. "ankadifotsy" -> "Ankadifotsy")
+        const label = id.charAt(0).toUpperCase() + id.slice(1).replace(/([A-Z])/g, ' $1').trim();
         const pct = stat.total > 0 ? Math.round((stat.stopped / stat.total) * 100) : 0;
-        return { zone, stat, pct };
+        return { zone: { id, label }, stat, pct };
     }).filter(row => row.stat.total > 0).sort((a, b) => b.pct - a.pct);
 
     return (

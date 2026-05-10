@@ -68,6 +68,20 @@ function buildBuildingQuery(center: LatLng) {
     `;
 }
 
+function buildZoneQuery(center: LatLng) {
+    const lat = center.lat;
+    const lng = center.lng;
+    const radius = Math.max(ROAD_FETCH_RADIUS, 0.03); // Fetch wider for zones to cover edges
+    const bbox = `${lat - radius},${lng - radius},${lat + radius},${lng + radius}`;
+    return `
+    [out:json][timeout:30];
+    (
+      node["place"~"suburb|neighbourhood|quarter"](${bbox});
+    );
+    out body;
+    `;
+}
+
 export interface OsmRoad {
     id: number;
     name: string;
@@ -121,6 +135,13 @@ export interface OsmBuilding {
     id: number;
     points: { x: number; z: number }[];
     levels: number;
+}
+
+export interface OsmZone {
+    id: string;
+    label: string;
+    lat: number;
+    lng: number;
 }
 
 export async function fetchOsmBuildings(center: LatLng): Promise<OsmBuilding[]> {
@@ -217,4 +238,47 @@ export function useOsmBuildings(center: LatLng) {
     }, [center.lat, center.lng]);
 
     return { buildings, loading };
+}
+
+export async function fetchOsmZones(center: LatLng): Promise<OsmZone[]> {
+    const res = await fetchWithTimeout(OVERPASS_URL, {
+        method: "POST",
+        body: "data=" + encodeURIComponent(buildZoneQuery(center)),
+    }, 45000);
+    if (res.status === 429) throw new Error("Overpass API: Too many requests");
+    const json = await res.json();
+
+    const zones: OsmZone[] = [];
+    for (const el of json.elements) {
+        if (el.type === "node" && el.tags && el.tags.name) {
+            zones.push({
+                id: el.tags.name.toLowerCase().replace(/[\s-]/g, ''),
+                label: el.tags.name,
+                lat: el.lat,
+                lng: el.lon
+            });
+        }
+    }
+    return zones;
+}
+
+export function useOsmZones(center: LatLng) {
+    const [zones, setZones] = useState<OsmZone[]>([]);
+    const [loading, setLoading] = useState(true);
+
+    useEffect(() => {
+        let cancelled = false;
+        setLoading(true);
+        fetchWithRetry(
+            () => fetchOsmZones(center)
+        ).then((data) => {
+            if (!cancelled) {
+                setZones(data);
+                setLoading(false);
+            }
+        });
+        return () => { cancelled = true; };
+    }, [center.lat, center.lng]);
+
+    return { zones, loading };
 }

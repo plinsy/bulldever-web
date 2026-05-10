@@ -3,7 +3,7 @@
 import { useMemo, useRef, useState, useEffect } from "react";
 import * as THREE from "three";
 import * as BufferGeometryUtils from "three/examples/jsm/utils/BufferGeometryUtils.js";
-import { OsmRoad, LatLng, ROAD_WIDTHS } from "../world/geo";
+import { OsmRoad, LatLng, ROAD_WIDTHS, OsmZone } from "../world/geo";
 import { classifyZone } from "./zones";
 import { useFrame } from "@react-three/fiber";
 import { Html } from "@react-three/drei";
@@ -54,6 +54,8 @@ interface CarSystemProps {
     signalMapRef?: React.MutableRefObject<TrafficSignalMap>;
     /** Danger zones fetched from the backend; cars slow down near them. */
     hotspots?: AccidentHotspot[];
+    /** Dynamic zones fetched from OSM */
+    dynamicZones?: OsmZone[];
 }
 
 /** Generate a Madagascar-style license plate: "AB 1234" or "TAM 5678" */
@@ -157,7 +159,7 @@ async function sendSnapshot(ws: WebSocket | null, metrics: TrafficMetrics, hour:
     }
 }
 
-export default function CarSystem({ roads, hour, onMetrics, center, onAccident, signalMapRef, hotspots = [] }: CarSystemProps) {
+export default function CarSystem({ roads, hour, onMetrics, center, onAccident, signalMapRef, hotspots = [], dynamicZones = [] }: CarSystemProps) {
     const chassisRef = useRef<THREE.InstancedMesh>(null!);
     const cabinRef = useRef<THREE.InstancedMesh>(null!);
     const headLightsRef = useRef<THREE.InstancedMesh>(null!);
@@ -602,7 +604,7 @@ export default function CarSystem({ roads, hour, onMetrics, center, onAccident, 
                 stoppedPerRoad[car.roadIdx][dirKey]++;
             }
 
-            const zoneId = classifyZone(pos.x, pos.z, center);
+            const zoneId = classifyZone(pos.x, pos.z, center, dynamicZones);
             if (zoneId !== null) {
                 if (!zoneStats[zoneId]) zoneStats[zoneId] = { total: 0, stopped: 0 };
                 zoneStats[zoneId].total++;
