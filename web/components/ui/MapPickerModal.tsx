@@ -36,6 +36,8 @@ export default function MapPickerModal({
     const containerRef = useRef<HTMLDivElement>(null);
     const originMarkerRef = useRef<import("leaflet").Marker | null>(null);
     const destMarkerRef = useRef<import("leaflet").Marker | null>(null);
+    const onMapClickRef = useRef(onMapClick);
+    useEffect(() => { onMapClickRef.current = onMapClick; }, [onMapClick]);
 
     // Initialize map once
     useEffect(() => {
@@ -59,7 +61,7 @@ export default function MapPickerModal({
             }).addTo(map);
 
             map.on("click", (e: import("leaflet").LeafletMouseEvent) => {
-                onMapClick(e.latlng.lat, e.latlng.lng);
+                onMapClickRef.current(e.latlng.lat, e.latlng.lng);
             });
 
             mapRef.current = map;

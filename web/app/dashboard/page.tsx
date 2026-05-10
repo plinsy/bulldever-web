@@ -177,8 +177,10 @@ function BestPathTab() {
         try {
             const res = await fetchBestPath(points.origin[0], points.origin[1], points.destination[0], points.destination[1]);
             setResult(res);
-        } catch {
-            setError("Impossible de calculer l'itinéraire. Vérifiez les points sélectionnés.");
+        } catch (err: unknown) {
+            const apiMsg =
+                (err as { response?: { data?: { error?: string } } })?.response?.data?.error;
+            setError(apiMsg ?? "Impossible de calculer l'itinéraire. Vérifiez les points sélectionnés.");
         } finally {
             setLoading(false);
         }
@@ -292,8 +294,10 @@ function DeparturePredictionTab() {
                 arrivalTime
             );
             setResult(res);
-        } catch {
-            setError("Impossible de calculer la prédiction. Vérifiez les données.");
+        } catch (err: unknown) {
+            const apiMsg =
+                (err as { response?: { data?: { error?: string } } })?.response?.data?.error;
+            setError(apiMsg ?? "Impossible de calculer la prédiction. Vérifiez les données.");
         } finally {
             setLoading(false);
         }
