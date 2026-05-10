@@ -85,7 +85,7 @@ class PathfindingView(APIView):
 def get_traffic_stats(zone_id: str = None):
     """
     Récupère les statistiques de trafic en temps réel pour une zone spécifique ou pour toute la ville.
-    Zones valides : analakely, anosizato, isotry, 67ha, ambohijatovo, tsaralalana, ankorondrano, behoririka.
+    N'importe quel quartier d'Antananarivo est valide s'il y a du trafic (ex: analakely, mahamasina, etc.).
     """
     latest = TrafficSnapshot.objects.order_by('-recorded_at').first()
     if not latest:
@@ -338,7 +338,9 @@ class ChatbotView(APIView):
             - Ivato: -18.796, 47.478
             
             RÈGLES :
-            - Si l'utilisateur veut aller d'un point à un autre, utilisez 'find_route'.
+           * Pour les questions de trafic, utilisez l'outil get_traffic_stats(). S'il y a un quartier précisé, passez-le en paramètre (ex: "analakely", "mahamasina", "ankadifotsy").
+        * Pour les itinéraires, utilisez l'outil find_route().
+        * Vous connaissez géographiquement Antananarivo. Utilisez les outils pour donner des réponses réelles.
             - Si l'utilisateur veut voir un endroit, utilisez 'move_camera'.
             - Répondez en par la langue que le utilisateur utilise.
             """

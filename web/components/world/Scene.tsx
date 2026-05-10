@@ -36,10 +36,12 @@ import {
   useOsmBuildings,
   OsmRoad,
   OsmBuilding,
+  OsmZone,
   latLngToVector3,
   METER,
   LatLng,
-  INITIAL_CENTER
+  INITIAL_CENTER,
+  useOsmZones
 } from "./geo";
 import axios from "axios";
 
@@ -251,9 +253,10 @@ interface WorldContentProps extends SceneProps {
 function WorldContent({ hour, onRoadInfo, onLoadingChange, onMetrics, onAccident, accidents = [], center, activePath, userLocation }: WorldContentProps) {
   const { roads, loading: roadsLoading } = useOsmRoads(center);
   const { buildings, loading: bldgLoading } = useOsmBuildings(center);
+  const { zones: dynamicZones, loading: zonesLoading } = useOsmZones(center);
   const [trafficData, setTrafficData] = useState<Record<number, number>>({});
   const [jammedRoads, setJammedRoads] = useState<Record<string, { fwd: boolean, bwd: boolean }>>({});
-  const loading = roadsLoading && bldgLoading;
+  const loading = roadsLoading && bldgLoading && zonesLoading;
 
   const signalMapRef = useRef<TrafficSignalMap>(new Map());
 
@@ -344,6 +347,8 @@ function WorldContent({ hour, onRoadInfo, onLoadingChange, onMetrics, onAccident
             center={center}
             onAccident={onAccident}
             signalMapRef={signalMapRef}
+            hotspots={accidents}
+            dynamicZones={dynamicZones}
           />
         </>
       )}
