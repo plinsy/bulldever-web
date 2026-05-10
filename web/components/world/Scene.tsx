@@ -1,6 +1,6 @@
 "use client";
 
-import { Canvas } from "@react-three/fiber";
+import { Canvas, useFrame } from "@react-three/fiber";
 import {
   OrbitControls,
   Sky,
@@ -36,13 +36,14 @@ import {
   useOsmBuildings,
   OsmRoad,
   OsmBuilding,
+  latLngToVector3,
   METER,
   LatLng,
   INITIAL_CENTER
 } from "./geo";
 import axios from "axios";
 
-const API_BASE = "http://localhost:8000/api";
+const API_BASE = "http://127.0.0.1:8000/api";
 
 function Ground() {
   return (
@@ -128,6 +129,109 @@ function OsmBuildings({ buildings }: { buildings: OsmBuilding[] }) {
   );
 }
 
+/**
+ * Visualise un chemin (tube vert) sur la carte 3D.
+ * On utilise un tube TubeGeometry car WebGL ignore linewidth > 1.
+ */
+function PathVisualizer({ path, center }: { path: { lat: number; lng: number }[]; center: LatLng }) {
+  const tubeGeo = useMemo(() => {
+    if (path.length < 2) return null;
+    const pts = path.map((p) => latLngToVector3(p.lat, p.lng, center, 0.3));
+    const curve = new THREE.CatmullRomCurve3(pts);
+    return new THREE.TubeGeometry(curve, Math.max(path.length * 4, 64), 0.4, 8, false);
+  }, [path, center]);
+
+  if (!tubeGeo) return null;
+
+  return (
+    <group>
+      {/* Main green tube */}
+      <mesh geometry={tubeGeo}>
+        <meshStandardMaterial
+          color="#22c55e"
+          emissive="#16a34a"
+          emissiveIntensity={0.6}
+          roughness={0.3}
+          metalness={0.1}
+          transparent
+          opacity={0.92}
+        />
+      </mesh>
+      {/* Outer glow halo */}
+      <mesh geometry={tubeGeo}>
+        <meshStandardMaterial
+          color="#4ade80"
+          emissive="#4ade80"
+          emissiveIntensity={1.5}
+          transparent
+          opacity={0.25}
+          side={THREE.BackSide}
+        />
+      </mesh>
+      {/* Start marker */}
+      {path.length > 0 && (() => {
+        const startPt = latLngToVector3(path[0].lat, path[0].lng, center, 1.0);
+        return (
+          <mesh position={startPt}>
+            <sphereGeometry args={[1.2, 16, 16]} />
+            <meshStandardMaterial color="#22c55e" emissive="#22c55e" emissiveIntensity={1} />
+          </mesh>
+        );
+      })()}
+      {/* End marker */}
+      {path.length > 1 && (() => {
+        const endPt = latLngToVector3(path[path.length - 1].lat, path[path.length - 1].lng, center, 1.0);
+        return (
+          <mesh position={endPt}>
+            <sphereGeometry args={[1.2, 16, 16]} />
+            <meshStandardMaterial color="#ef4444" emissive="#ef4444" emissiveIntensity={1} />
+          </mesh>
+        );
+      })()}
+    </group>
+  );
+}
+
+/** Pulsing blue dot showing the user's real GPS location in the 3D scene */
+function UserLocationMarker({ userLocation, center }: { userLocation: LatLng | null; center: LatLng }) {
+  const pulseRef = useRef<THREE.Mesh>(null);
+  useFrame(({ clock }) => {
+    if (pulseRef.current) {
+      const s = 1 + 0.4 * Math.sin(clock.elapsedTime * 3);
+      pulseRef.current.scale.setScalar(s);
+      (pulseRef.current.material as THREE.MeshStandardMaterial).opacity = 0.5 - 0.3 * Math.sin(clock.elapsedTime * 3);
+    }
+  });
+
+  if (!userLocation) return null;
+  const pos = latLngToVector3(userLocation.lat, userLocation.lng, center, 1.5);
+
+  return (
+    <group position={pos}>
+      {/* Solid core */}
+      <mesh>
+        <sphereGeometry args={[0.8, 16, 16]} />
+        <meshStandardMaterial color="#3b82f6" emissive="#3b82f6" emissiveIntensity={1.5} />
+      </mesh>
+      {/* White ring */}
+      <mesh>
+        <torusGeometry args={[1.2, 0.15, 8, 32]} />
+        <meshStandardMaterial color="#ffffff" emissive="#ffffff" emissiveIntensity={0.8} />
+      </mesh>
+      {/* Pulsing outer halo */}
+      <mesh ref={pulseRef}>
+        <sphereGeometry args={[1.5, 16, 16]} />
+        <meshStandardMaterial color="#60a5fa" emissive="#60a5fa" emissiveIntensity={0.5} transparent opacity={0.4} />
+      </mesh>
+      {/* Vertical beam */}
+      <mesh position={[0, 4, 0]}>
+        <cylinderGeometry args={[0.05, 0.05, 8, 8]} />
+        <meshStandardMaterial color="#3b82f6" emissive="#3b82f6" emissiveIntensity={1} transparent opacity={0.6} />
+      </mesh>
+    </group>
+  );
+}
+
 interface SceneProps {
   hour: number;
   onRoadInfo: (info: string) => void;
@@ -135,13 +239,16 @@ interface SceneProps {
   onMetrics?: (metrics: TrafficMetrics) => void;
   onAccident?: (event: AccidentEvent) => void;
   accidents?: AccidentEvent[];
+  onUserLocation?: (loc: LatLng) => void;
 }
 
 interface WorldContentProps extends SceneProps {
     center: LatLng;
+    activePath: {lat: number, lng: number}[];
+    userLocation: LatLng | null;
 }
 
-function WorldContent({ hour, onRoadInfo, onLoadingChange, onMetrics, onAccident, accidents = [], center }: WorldContentProps) {
+function WorldContent({ hour, onRoadInfo, onLoadingChange, onMetrics, onAccident, accidents = [], center, activePath, userLocation }: WorldContentProps) {
   const { roads, loading: roadsLoading } = useOsmRoads(center);
   const { buildings, loading: bldgLoading } = useOsmBuildings(center);
   const [trafficData, setTrafficData] = useState<Record<number, number>>({});
@@ -149,24 +256,11 @@ function WorldContent({ hour, onRoadInfo, onLoadingChange, onMetrics, onAccident
   const loading = roadsLoading && bldgLoading;
 
   const signalMapRef = useRef<TrafficSignalMap>(new Map());
-  const [hotspots, setHotspots] = useState<AccidentHotspot[]>([]);
 
   useEffect(() => {
     onLoadingChange?.(loading);
   }, [loading, onLoadingChange]);
 
-  // Fetch hotspots on mount then refresh every 30 s so the map stays current.
-  useEffect(() => {
-    const fetchHotspots = () => {
-      axios
-        .get(`${API_BASE}/accidents/`)
-        .then((res) => setHotspots(res.data))
-        .catch(() => {});
-    };
-    fetchHotspots();
-    const id = setInterval(fetchHotspots, 30_000);
-    return () => clearInterval(id);
-  }, []);
 
   useEffect(() => {
     axios
@@ -205,6 +299,8 @@ function WorldContent({ hour, onRoadInfo, onLoadingChange, onMetrics, onAccident
 
       <Ground />
       <OsmBuildings buildings={buildings} />
+      <PathVisualizer path={activePath} center={center} />
+      <UserLocationMarker userLocation={userLocation} center={center} />
       
       {!roadsLoading && (
         <RoadNetwork 
@@ -248,13 +344,12 @@ function WorldContent({ hour, onRoadInfo, onLoadingChange, onMetrics, onAccident
             center={center}
             onAccident={onAccident}
             signalMapRef={signalMapRef}
-            hotspots={hotspots}
           />
         </>
       )}
 
       {/* Accident visual markers */}
-      <AccidentMarkers accidents={accidents} hotspots={hotspots} />
+      <AccidentMarkers accidents={accidents} />
       <OrbitControls makeDefault />
       <GizmoHelper alignment="bottom-right" margin={[80, 80]}>
         <GizmoViewport axisColors={["#ef4444", "#22c55e", "#3b82f6"]} labelColor="white" />
@@ -265,15 +360,64 @@ function WorldContent({ hour, onRoadInfo, onLoadingChange, onMetrics, onAccident
 
 export default function Scene(props: SceneProps) {
   const [center, setCenter] = useState<LatLng>(INITIAL_CENTER);
+  const [activePath, setActivePath] = useState<{lat: number, lng: number}[]>([]);
+  const [userLocation, setUserLocation] = useState<LatLng | null>(null);
+  const [gpsStatus, setGpsStatus] = useState<'pending' | 'ok' | 'denied'>('pending');
+  const hasCenteredRef = useRef(false);
+
+  // ── Real-time GPS tracking ──────────────────────────────────────────────
+  useEffect(() => {
+    if (!navigator.geolocation) {
+      setGpsStatus('denied');
+      return;
+    }
+    const watchId = navigator.geolocation.watchPosition(
+      (pos) => {
+        const loc = { lat: pos.coords.latitude, lng: pos.coords.longitude };
+        setUserLocation(loc);
+        setGpsStatus('ok');
+        props.onUserLocation?.(loc);
+        
+        // Center the map on the user's location once upon initial load
+        if (!hasCenteredRef.current) {
+           setCenter(loc);
+           hasCenteredRef.current = true;
+        }
+      },
+      (err) => {
+        console.warn('Geolocation error:', err.message);
+        setGpsStatus('denied');
+      },
+      { enableHighAccuracy: true, maximumAge: 5000, timeout: 15000 }
+    );
+    return () => navigator.geolocation.clearWatch(watchId);
+  }, []);
 
   const move = (latD: number, lngD: number) => {
     setCenter(prev => ({ lat: prev.lat + latD, lng: prev.lng + lngD }));
   };
 
+  // Écouter les actions de l'IA (depuis ChatbotUI)
+  useEffect(() => {
+    const handleMapAction = (e: any) => {
+      const action = e.detail;
+      if (action.type === 'SET_PATH') {
+        setActivePath(action.payload);
+        if (action.payload.length > 0) {
+          setCenter({ lat: action.payload[0].lat, lng: action.payload[0].lng });
+        }
+      } else if (action.type === 'MOVE_CAMERA') {
+        setCenter({ lat: action.payload.lat, lng: action.payload.lng });
+      }
+    };
+    window.addEventListener('MAP_ACTION', handleMapAction);
+    return () => window.removeEventListener('MAP_ACTION', handleMapAction);
+  }, []);
+
   return (
     <div className="relative w-full h-screen">
       <Canvas shadows camera={{ position: [20, 20, 20], fov: 45 }}>
-        <WorldContent {...props} center={center} />
+        <WorldContent {...props} center={center} activePath={activePath} userLocation={userLocation} />
       </Canvas>
 
       {/* Navigation UI Overlay */}
@@ -316,13 +460,24 @@ export default function Scene(props: SceneProps) {
 
         {/* Current Location Badge */}
         <div className="absolute top-8 left-1/2 -translate-x-1/2 pointer-events-auto bg-slate-950/90 backdrop-blur-xl border border-slate-800 px-4 py-2 rounded-full shadow-2xl flex items-center gap-3">
-            <div className="bg-blue-500/20 p-1.5 rounded-full">
-                <Navigation size={14} className="text-blue-400 rotate-45" />
+            <div className={`p-1.5 rounded-full ${
+              gpsStatus === 'ok' ? 'bg-blue-500/20' :
+              gpsStatus === 'denied' ? 'bg-red-500/20' : 'bg-yellow-500/20'
+            }`}>
+                <Navigation size={14} className={`rotate-45 ${
+                  gpsStatus === 'ok' ? 'text-blue-400' :
+                  gpsStatus === 'denied' ? 'text-red-400' : 'text-yellow-400 animate-pulse'
+                }`} />
             </div>
             <div className="flex flex-col">
-                <span className="text-[10px] text-slate-500 font-bold uppercase tracking-widest">Zone Actuelle</span>
+                <span className="text-[10px] text-slate-500 font-bold uppercase tracking-widest">
+                  {gpsStatus === 'ok' ? 'Position GPS' : gpsStatus === 'denied' ? 'GPS Refusé' : 'Localisation...'}
+                </span>
                 <span className="text-xs font-mono text-white">
-                    {center.lat.toFixed(4)}, {center.lng.toFixed(4)}
+                  {userLocation
+                    ? `${userLocation.lat.toFixed(4)}, ${userLocation.lng.toFixed(4)}`
+                    : `${center.lat.toFixed(4)}, ${center.lng.toFixed(4)}`
+                  }
                 </span>
             </div>
         </div>

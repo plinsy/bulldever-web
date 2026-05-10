@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useRef, useState } from "react";
+import { useMemo, useRef, useState, useEffect } from "react";
 import * as THREE from "three";
 import * as BufferGeometryUtils from "three/examples/jsm/utils/BufferGeometryUtils.js";
 import { OsmRoad, LatLng, ROAD_WIDTHS } from "../world/geo";
@@ -21,8 +21,8 @@ const API_BASE = "http://localhost:8000/api";
 const STOPPED_SPEED_THRESHOLD = 0.0003;
 // Intersection detection radius in scene units
 const INTERSECTION_RADIUS = 10 * METER;
-// How often (ms) to POST metrics to the backend
-const SNAPSHOT_INTERVAL_MS = 5000;
+// How often (ms) to POST metrics to the backend (30s is enough for trend analysis)
+const SNAPSHOT_INTERVAL_MS = 30000;
 
 export interface ZoneStat {
     total: number;
@@ -114,37 +114,46 @@ function sceneSpeedToKmh(sceneUnitsPerFrame: number, fps = 60): number {
     return metersPerSecond * 3.6;
 }
 
-async function postAccident(x: number, z: number, bodily: boolean): Promise<void> {
-    try {
-        await fetch(`${API_BASE}/accidents/`, {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ scene_x: x, scene_z: z, bodily }),
-        });
-    } catch {
-        // Network errors are non-fatal; simulation continues
+async function postAccident(ws: WebSocket | null, x: number, z: number, bodily: boolean): Promise<void> {
+    if (ws && ws.readyState === WebSocket.OPEN) {
+        ws.send(JSON.stringify({
+            action: 'accident',
+            payload: { scene_x: x, scene_z: z, bodily }
+        }));
+    } else {
+        try {
+            await fetch(`${API_BASE}/accidents/`, {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ scene_x: x, scene_z: z, bodily }),
+            });
+        } catch {}
     }
 }
 
-async function postSnapshot(metrics: TrafficMetrics, hour: number): Promise<void> {
-    try {
-        await fetch(`${API_BASE}/traffic-stats/`, {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-                sim_hour: hour,
-                total_cars: metrics.totalCars,
-                stopped_cars: metrics.stoppedCars,
-                cars_in_intersections: metrics.carsInIntersections,
-                avg_speed_kmh: metrics.avgSpeedKmh,
-                zone_counts: Object.fromEntries(
-                    Object.entries(metrics.zoneStats).map(([id, stat]) => [id, stat.stopped])
-                ),
-                intersection_counts: metrics.intersectionCounts,
-            }),
-        });
-    } catch {
-        // Network errors are non-fatal; simulation continues
+async function sendSnapshot(ws: WebSocket | null, metrics: TrafficMetrics, hour: number): Promise<void> {
+    const payload = {
+        sim_hour: hour,
+        total_cars: metrics.totalCars,
+        stopped_cars: metrics.stoppedCars,
+        cars_in_intersections: metrics.carsInIntersections,
+        avg_speed_kmh: metrics.avgSpeedKmh,
+        zone_counts: Object.fromEntries(
+            Object.entries(metrics.zoneStats).map(([id, stat]) => [id, stat.stopped])
+        ),
+        intersection_counts: metrics.intersectionCounts,
+    };
+
+    if (ws && ws.readyState === WebSocket.OPEN) {
+        ws.send(JSON.stringify({ action: 'snapshot', payload }));
+    } else {
+        try {
+            await fetch(`${API_BASE}/traffic-stats/`, {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify(payload),
+            });
+        } catch {}
     }
 }
 
@@ -160,6 +169,17 @@ export default function CarSystem({ roads, hour, onMetrics, center, onAccident, 
     const [selectedIdx, setSelectedIdx] = useState<number | null>(null);
     const collidedPairsRef = useRef<Set<string>>(new Set());
     const frameCountRef = useRef<number>(0);
+    const wsRef = useRef<WebSocket | null>(null);
+
+    useEffect(() => {
+        const ws = new WebSocket("ws://localhost:8000/ws/traffic/");
+        wsRef.current = ws;
+        ws.onopen = () => console.log("Traffic WS Connected");
+        ws.onclose = () => console.log("Traffic WS Disconnected");
+        return () => {
+            if (ws.readyState === WebSocket.OPEN) ws.close();
+        };
+    }, []);
 
     const intersections = useMemo(() => deriveIntersections(roads, center), [roads, center]);
 
@@ -349,34 +369,92 @@ export default function CarSystem({ roads, hour, onMetrics, center, onAccident, 
             const curve = roadCurves[car.roadIdx];
             if (!curve) return;
 
+            // ── 1. FORWARD RADAR: Follow the car in front ────────────────
             let minDistanceInFront = Infinity;
             carState.forEach((otherCar, j) => {
                 if (i === j || !otherCar.initialized || !car.initialized) return;
+                if (otherCar.isExploded) {
+                    // Exploded cars are static obstacles — check them from any direction
+                    const dist = car.currentPos.distanceTo(otherCar.currentPos);
+                    if (dist < CONFIG.SAFE_GAP * METER) minDistanceInFront = Math.min(minDistanceInFront, dist);
+                    return;
+                }
                 const sameRoadAndDir = (otherCar.roadIdx === car.roadIdx && otherCar.direction === car.direction);
-                if (otherCar.roadIdx === car.roadIdx && otherCar.direction !== car.direction) return;
-                // Optimization: skip if on different road and i > j, UNLESS other car is exploded (static obstacle)
-                if (!sameRoadAndDir && i > j && !otherCar.isExploded) return;
+                if (otherCar.roadIdx === car.roadIdx && otherCar.direction !== car.direction) return; // skip oncoming, handled by lanes
+                if (!sameRoadAndDir && i > j) return;
                 const toOther = new THREE.Vector3().subVectors(otherCar.currentPos, car.currentPos);
                 const dist = toOther.length();
                 if (dist < CONFIG.RADAR_DISTANCE * METER) {
-                    toOther.normalize();
                     const curveT = Math.max(0, Math.min(1, car.progress));
                     const fwd = curve.getTangentAt(curveT);
                     if (car.direction === -1) fwd.negate();
-                    if (fwd.dot(toOther) > CONFIG.RADAR_CONE_DOT) {
+                    if (fwd.dot(toOther.clone().normalize()) > CONFIG.RADAR_CONE_DOT) {
                         minDistanceInFront = Math.min(minDistanceInFront, dist);
                     }
                 }
             });
 
+            // ── 2. CROSS-TRAFFIC RADAR: See cars approaching from the side ─
+            let crossThreatDist = Infinity;
+            const curveT2 = Math.max(0, Math.min(1, car.progress));
+            const myFwd = curve.getTangentAt(curveT2);
+            if (car.direction === -1) myFwd.negate();
+
+            carState.forEach((otherCar, j) => {
+                if (i === j || !otherCar.initialized || !car.initialized || otherCar.isExploded) return;
+                if (otherCar.roadIdx === car.roadIdx) return; // same road handled above
+                const toOther = new THREE.Vector3().subVectors(otherCar.currentPos, car.currentPos);
+                const dist = toOther.length();
+                if (dist < CONFIG.CROSS_RADAR_DISTANCE * METER) {
+                    const dot = myFwd.dot(toOther.clone().normalize());
+                    // Detect vehicles NOT behind us (ahead + sides)
+                    if (dot > CONFIG.CROSS_RADAR_DOT) {
+                        crossThreatDist = Math.min(crossThreatDist, dist);
+                    }
+                }
+            });
+
+            // ── 3. INTERSECTION PROXIMITY SLOWDOWN ───────────────────────
+            let intersectionSlowFactor = 1.0;
+            const approachM = CONFIG.INTERSECTION_APPROACH * METER;
+            const stopM = CONFIG.INTERSECTION_STOP * METER;
+            for (const iPos of intersections) {
+                const dx = car.currentPos.x - iPos.x;
+                const dz = car.currentPos.z - iPos.z;
+                const distToIntersection = Math.sqrt(dx * dx + dz * dz);
+                if (distToIntersection < approachM) {
+                    // Slow down proportionally as we approach
+                    const factor = Math.max(0.25, distToIntersection / approachM);
+                    intersectionSlowFactor = Math.min(intersectionSlowFactor, factor);
+                    // If very close, check for cross-traffic and yield
+                    if (distToIntersection < stopM && crossThreatDist < CONFIG.INTERSECTION_YIELD_GAP * METER) {
+                        intersectionSlowFactor = 0; // Full stop — yield
+                    }
+                    break; // Only react to nearest intersection
+                }
+            }
+
+            // ── 4. COMPUTE FINAL SPEED ────────────────────────────────────
             let currentSpeed = car.baseSpeed;
             const safeGap = CONFIG.SAFE_GAP * METER;
             const slowGap = CONFIG.SLOW_GAP * METER;
+
+            // Forward collision avoidance
             if (minDistanceInFront < safeGap) {
                 currentSpeed = 0;
             } else if (minDistanceInFront < slowGap) {
-                currentSpeed *= 0.3;
+                const t = (minDistanceInFront - safeGap) / (slowGap - safeGap);
+                currentSpeed *= t * 0.5; // Smooth braking
             }
+
+            // Cross-traffic yield
+            if (crossThreatDist < CONFIG.CROSS_RADAR_DISTANCE * METER) {
+                const crossFactor = Math.min(1, crossThreatDist / (CONFIG.CROSS_RADAR_DISTANCE * METER));
+                currentSpeed = Math.min(currentSpeed, car.baseSpeed * crossFactor * 0.6);
+            }
+
+            // Intersection proximity
+            currentSpeed *= intersectionSlowFactor;
 
             // ── Traffic light check ──────────────────────────────────────
             if (currentSpeed > 0 && signalMapRef?.current) {
@@ -586,7 +664,7 @@ export default function CarSystem({ roads, hour, onMetrics, center, onAccident, 
                             bodily,
                             timestamp: Date.now(),
                         });
-                        postAccident(midpoint.x, midpoint.z, bodily);
+                        postAccident(wsRef.current, midpoint.x, midpoint.z, bodily);
                     }
                 }
             }
@@ -608,7 +686,7 @@ export default function CarSystem({ roads, hour, onMetrics, center, onAccident, 
         const now = state.clock.getElapsedTime() * 1000;
         if (now - lastSnapshotRef.current >= SNAPSHOT_INTERVAL_MS) {
             lastSnapshotRef.current = now;
-            postSnapshot(metrics, hour);
+            sendSnapshot(wsRef.current, metrics, hour);
         }
     });
 

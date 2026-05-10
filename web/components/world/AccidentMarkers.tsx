@@ -9,77 +9,15 @@ import * as CONFIG from "../simulation/config";
 
 interface AccidentMarkersProps {
     accidents: AccidentEvent[];
-    hotspots?: AccidentHotspot[];
 }
 
-/** Pulsing red beacon above each accident position + translucent hotspot rings. */
-export default function AccidentMarkers({ accidents, hotspots = [] }: AccidentMarkersProps) {
+/** Pulsing red beacon above each active accident position. */
+export default function AccidentMarkers({ accidents }: AccidentMarkersProps) {
     return (
         <group>
-            {hotspots.map((hs, i) => (
-                <HotspotZone key={`hs-${i}`} hotspot={hs} />
-            ))}
             {accidents.map((acc) => (
                 <AccidentPin key={acc.id} accident={acc} />
             ))}
-        </group>
-    );
-}
-
-function HotspotZone({ hotspot }: { hotspot: AccidentHotspot }) {
-    const meshRef = useRef<THREE.Mesh>(null!);
-    const radius = CONFIG.HOTSPOT_INFLUENCE_RADIUS;
-    const isHigh = hotspot.severity === "high";
-    const color = isHigh ? "#ef4444" : "#f97316";
-
-    useFrame(({ clock }) => {
-        if (!meshRef.current) return;
-        const t = clock.getElapsedTime();
-        // Gentle breathing opacity
-        (meshRef.current.material as THREE.MeshStandardMaterial).opacity =
-            0.08 + 0.06 * Math.sin(t * 1.5);
-    });
-
-    return (
-        <group position={[hotspot.x, 0.05, hotspot.z]}>
-            {/* Translucent danger disc */}
-            <mesh ref={meshRef} rotation={[-Math.PI / 2, 0, 0]}>
-                <circleGeometry args={[radius, 48]} />
-                <meshStandardMaterial
-                    color={color}
-                    transparent
-                    opacity={0.12}
-                    depthWrite={false}
-                />
-            </mesh>
-            {/* Thin border ring */}
-            <mesh rotation={[-Math.PI / 2, 0, 0]}>
-                <ringGeometry args={[radius - 0.5, radius, 48]} />
-                <meshStandardMaterial
-                    color={color}
-                    transparent
-                    opacity={0.5}
-                    depthWrite={false}
-                />
-            </mesh>
-            {/* Floating label */}
-            <Html position={[0, 3, 0]} center distanceFactor={120}>
-                <div
-                    style={{
-                        background: "rgba(0,0,0,0.75)",
-                        border: `1px solid ${color}`,
-                        borderRadius: 6,
-                        padding: "3px 8px",
-                        color,
-                        fontWeight: "bold",
-                        fontSize: 11,
-                        whiteSpace: "nowrap",
-                        pointerEvents: "none",
-                    }}
-                >
-                    ⚠ Zone accidentogène ({hotspot.count})
-                </div>
-            </Html>
         </group>
     );
 }

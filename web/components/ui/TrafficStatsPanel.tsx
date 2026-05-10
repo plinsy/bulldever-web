@@ -4,7 +4,7 @@ import { useState, useEffect } from "react";
 import { Car, StopCircle, GitFork, Gauge, AlertTriangle } from "lucide-react";
 import type { TrafficMetrics } from "@/components/simulation/CarSystem";
 
-const API_BASE = "http://localhost:8000/api";
+const API_BASE = "http://127.0.0.1:8000/api";
 
 interface TrafficStatsPanelProps {
     metrics: TrafficMetrics | null;
