@@ -179,11 +179,12 @@ function WorldContent({ hour, onRoadInfo, onLoadingChange, onMetrics, onAccident
   }, [loading, onLoadingChange]);
 
   // Fetch hotspots on mount then refresh every 30 s so the map stays current.
+  // Only show zones with 3+ accidents to avoid false positives on fresh start.
   useEffect(() => {
     const fetchHotspots = () => {
       axios
         .get(`${API_BASE}/accidents/`)
-        .then((res) => setHotspots(res.data))
+        .then((res) => setHotspots(res.data.filter((hs: AccidentHotspot) => hs.count >= 3)))
         .catch(() => {});
     };
     fetchHotspots();

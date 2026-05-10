@@ -349,34 +349,92 @@ export default function CarSystem({ roads, hour, onMetrics, center, onAccident, 
             const curve = roadCurves[car.roadIdx];
             if (!curve) return;
 
+            // ── 1. FORWARD RADAR: Follow the car in front ────────────────
             let minDistanceInFront = Infinity;
             carState.forEach((otherCar, j) => {
                 if (i === j || !otherCar.initialized || !car.initialized) return;
+                if (otherCar.isExploded) {
+                    // Exploded cars are static obstacles — check them from any direction
+                    const dist = car.currentPos.distanceTo(otherCar.currentPos);
+                    if (dist < CONFIG.SAFE_GAP * METER) minDistanceInFront = Math.min(minDistanceInFront, dist);
+                    return;
+                }
                 const sameRoadAndDir = (otherCar.roadIdx === car.roadIdx && otherCar.direction === car.direction);
-                if (otherCar.roadIdx === car.roadIdx && otherCar.direction !== car.direction) return;
-                // Optimization: skip if on different road and i > j, UNLESS other car is exploded (static obstacle)
-                if (!sameRoadAndDir && i > j && !otherCar.isExploded) return;
+                if (otherCar.roadIdx === car.roadIdx && otherCar.direction !== car.direction) return; // skip oncoming, handled by lanes
+                if (!sameRoadAndDir && i > j) return;
                 const toOther = new THREE.Vector3().subVectors(otherCar.currentPos, car.currentPos);
                 const dist = toOther.length();
                 if (dist < CONFIG.RADAR_DISTANCE * METER) {
-                    toOther.normalize();
                     const curveT = Math.max(0, Math.min(1, car.progress));
                     const fwd = curve.getTangentAt(curveT);
                     if (car.direction === -1) fwd.negate();
-                    if (fwd.dot(toOther) > CONFIG.RADAR_CONE_DOT) {
+                    if (fwd.dot(toOther.clone().normalize()) > CONFIG.RADAR_CONE_DOT) {
                         minDistanceInFront = Math.min(minDistanceInFront, dist);
                     }
                 }
             });
 
+            // ── 2. CROSS-TRAFFIC RADAR: See cars approaching from the side ─
+            let crossThreatDist = Infinity;
+            const curveT2 = Math.max(0, Math.min(1, car.progress));
+            const myFwd = curve.getTangentAt(curveT2);
+            if (car.direction === -1) myFwd.negate();
+
+            carState.forEach((otherCar, j) => {
+                if (i === j || !otherCar.initialized || !car.initialized || otherCar.isExploded) return;
+                if (otherCar.roadIdx === car.roadIdx) return; // same road handled above
+                const toOther = new THREE.Vector3().subVectors(otherCar.currentPos, car.currentPos);
+                const dist = toOther.length();
+                if (dist < CONFIG.CROSS_RADAR_DISTANCE * METER) {
+                    const dot = myFwd.dot(toOther.clone().normalize());
+                    // Detect vehicles NOT behind us (ahead + sides)
+                    if (dot > CONFIG.CROSS_RADAR_DOT) {
+                        crossThreatDist = Math.min(crossThreatDist, dist);
+                    }
+                }
+            });
+
+            // ── 3. INTERSECTION PROXIMITY SLOWDOWN ───────────────────────
+            let intersectionSlowFactor = 1.0;
+            const approachM = CONFIG.INTERSECTION_APPROACH * METER;
+            const stopM = CONFIG.INTERSECTION_STOP * METER;
+            for (const iPos of intersections) {
+                const dx = car.currentPos.x - iPos.x;
+                const dz = car.currentPos.z - iPos.z;
+                const distToIntersection = Math.sqrt(dx * dx + dz * dz);
+                if (distToIntersection < approachM) {
+                    // Slow down proportionally as we approach
+                    const factor = Math.max(0.25, distToIntersection / approachM);
+                    intersectionSlowFactor = Math.min(intersectionSlowFactor, factor);
+                    // If very close, check for cross-traffic and yield
+                    if (distToIntersection < stopM && crossThreatDist < CONFIG.INTERSECTION_YIELD_GAP * METER) {
+                        intersectionSlowFactor = 0; // Full stop — yield
+                    }
+                    break; // Only react to nearest intersection
+                }
+            }
+
+            // ── 4. COMPUTE FINAL SPEED ────────────────────────────────────
             let currentSpeed = car.baseSpeed;
             const safeGap = CONFIG.SAFE_GAP * METER;
             const slowGap = CONFIG.SLOW_GAP * METER;
+
+            // Forward collision avoidance
             if (minDistanceInFront < safeGap) {
                 currentSpeed = 0;
             } else if (minDistanceInFront < slowGap) {
-                currentSpeed *= 0.3;
+                const t = (minDistanceInFront - safeGap) / (slowGap - safeGap);
+                currentSpeed *= t * 0.5; // Smooth braking
             }
+
+            // Cross-traffic yield
+            if (crossThreatDist < CONFIG.CROSS_RADAR_DISTANCE * METER) {
+                const crossFactor = Math.min(1, crossThreatDist / (CONFIG.CROSS_RADAR_DISTANCE * METER));
+                currentSpeed = Math.min(currentSpeed, car.baseSpeed * crossFactor * 0.6);
+            }
+
+            // Intersection proximity
+            currentSpeed *= intersectionSlowFactor;
 
             // ── Traffic light check ──────────────────────────────────────
             if (currentSpeed > 0 && signalMapRef?.current) {
