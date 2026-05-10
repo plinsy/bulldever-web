@@ -66,17 +66,18 @@ class PathfindingView(APIView):
         start = request.data.get('start') # {lat, lng}
         end = request.data.get('end')     # {lat, lng}
         
-        # In a real app, we'd use A* on the road network
-        # For this prototype, we'll return a straight line path along the nearest road segments
-        # or a mock path for demonstration.
+        if not start or not end:
+            return Response({'error': 'start and end coordinates are required'}, status=status.HTTP_400_BAD_REQUEST)
+            
+        result = _calculate_route_path(start['lat'], start['lng'], end['lat'], end['lng'])
         
-        # Mocking a path
-        path = [start, end] # Simplest path
-        
+        if "error" in result:
+            return Response(result, status=status.HTTP_400_BAD_REQUEST)
+            
         return Response({
-            'path': path,
-            'distance': 1.5, # km
-            'estimated_time': 15 # mins
+            'path': result['path'],
+            'distance': result['distance_km'],
+            'estimated_time': max(1, int(result['distance_km'] * 60 / 20)) # Assuming 20km/h avg in Mada
         })
 
 # --- AI TOOLS DEFINITIONS ---
@@ -133,12 +134,7 @@ def predict_zone_congestion(zone_id: str):
         "prediction": "Risque élevé de bouchon" if trend == "en augmentation" and vals[0] > 5 else "Trafic fluide attendu"
     }
 
-def find_route(start_lat: float, start_lng: float, end_lat: float, end_lng: float):
-    """
-    Calcule le meilleur itinéraire entre deux points GPS et l'affiche sur la carte en vert.
-    Utilise les vraies données routières OpenStreetMap (Overpass API) — pas de liste codée en dur.
-    Les coordonnées doivent être en degrés décimaux (ex: lat=-18.91, lng=47.53).
-    """
+def _calculate_route_path(start_lat: float, start_lng: float, end_lat: float, end_lng: float):
     import heapq, math, urllib.request, urllib.parse, json as _json
 
     def haversine(lat1, lng1, lat2, lng2):
@@ -149,7 +145,6 @@ def find_route(start_lat: float, start_lng: float, end_lat: float, end_lng: floa
         return R * 2 * math.asin(math.sqrt(a))
 
     try:
-        # ── 1. Build bounding box covering start → end with a margin ──────
         margin = 0.015  # ~1.5 km padding around the route
         min_lat = min(start_lat, end_lat) - margin
         max_lat = max(start_lat, end_lat) + margin
@@ -157,7 +152,6 @@ def find_route(start_lat: float, start_lng: float, end_lat: float, end_lng: floa
         max_lng = max(start_lng, end_lng) + margin
         bbox = f"{min_lat},{min_lng},{max_lat},{max_lng}"
 
-        # ── 2. Fetch real road network from Overpass API ───────────────────
         query = f"""
         [out:json][timeout:20];
         (
@@ -177,9 +171,8 @@ def find_route(start_lat: float, start_lng: float, end_lat: float, end_lng: floa
         with urllib.request.urlopen(req, timeout=25) as resp:
             osm = _json.loads(resp.read())
 
-        # ── 3. Parse nodes and ways ────────────────────────────────────────
-        nodes = {}   # id → (lat, lng)
-        ways = []    # list of [node_id, ...]
+        nodes = {}
+        ways = []
         for el in osm.get("elements", []):
             if el["type"] == "node":
                 nodes[el["id"]] = (el["lat"], el["lon"])
@@ -189,7 +182,6 @@ def find_route(start_lat: float, start_lng: float, end_lat: float, end_lng: floa
         if not nodes or not ways:
             return {"error": "Aucune route trouvée dans cette zone"}
 
-        # ── 4. Build adjacency graph ───────────────────────────────────────
         graph = {}
         for way in ways:
             for i in range(len(way) - 1):
@@ -202,7 +194,6 @@ def find_route(start_lat: float, start_lng: float, end_lat: float, end_lng: floa
                 graph.setdefault(a, []).append((b, d))
                 graph.setdefault(b, []).append((a, d))
 
-        # ── 5. Find nearest graph node to start and end ───────────────────
         def nearest(lat, lng):
             best, best_d = None, float('inf')
             for nid, (nlat, nlng) in nodes.items():
@@ -219,7 +210,6 @@ def find_route(start_lat: float, start_lng: float, end_lat: float, end_lng: floa
         if start_node is None or end_node is None:
             return {"error": "Impossible de localiser les points sur le réseau routier"}
 
-        # ── 6. Dijkstra ───────────────────────────────────────────────────
         dist = {start_node: 0.0}
         prev = {}
         heap = [(0.0, start_node)]
@@ -239,7 +229,6 @@ def find_route(start_lat: float, start_lng: float, end_lat: float, end_lng: floa
                     prev[v] = u
                     heapq.heappush(heap, (nd, v))
 
-        # ── 7. Reconstruct path ───────────────────────────────────────────
         if end_node not in dist or dist[end_node] == float('inf'):
             return {"error": "Aucun chemin trouvé entre ces deux points"}
 
@@ -249,7 +238,6 @@ def find_route(start_lat: float, start_lng: float, end_lat: float, end_lng: floa
             cur = prev.get(cur)
         path_ids.reverse()
 
-        # Simplify: keep 1 point every ~50m to reduce payload size
         path_coords = []
         last_lat, last_lng = None, None
         for nid in path_ids:
@@ -258,24 +246,44 @@ def find_route(start_lat: float, start_lng: float, end_lat: float, end_lng: floa
                 path_coords.append({"lat": lat, "lng": lng})
                 last_lat, last_lng = lat, lng
 
-        # ── 8. Send actions to the frontend ──────────────────────────────
-        if not hasattr(request_context, 'actions'):
-            request_context.actions = []
-        request_context.actions.append({"type": "SET_PATH", "payload": path_coords})
-        request_context.actions.append({
-            "type": "MOVE_CAMERA",
-            "payload": {"lat": start_lat, "lng": start_lng, "zoom": 15}
-        })
-
         total_dist = round(dist[end_node] / 1000, 1)
         return {
-            "status": "Route tracée sur la carte",
-            "points": len(path_coords),
+            "path": path_coords,
             "distance_km": total_dist,
         }
 
     except Exception as e:
-        return {"error": f"Erreur de routage: {str(e)}"}
+        return {"error": f"Erreur interne de routage: {str(e)}"}
+
+
+def find_route(start_lat: float, start_lng: float, end_lat: float, end_lng: float):
+    """
+    Calcule le meilleur itinéraire entre deux points GPS et l'affiche sur la carte en vert.
+    Utilise les vraies données routières OpenStreetMap (Overpass API) — pas de liste codée en dur.
+    Les coordonnées doivent être en degrés décimaux (ex: lat=-18.91, lng=47.53).
+    """
+    result = _calculate_route_path(start_lat, start_lng, end_lat, end_lng)
+    
+    if "error" in result:
+        return result
+
+    path_coords = result["path"]
+    total_dist = result["distance_km"]
+
+    # ── Send actions to the frontend ──────────────────────────────
+    if not hasattr(request_context, 'actions'):
+        request_context.actions = []
+    request_context.actions.append({"type": "SET_PATH", "payload": path_coords})
+    request_context.actions.append({
+        "type": "MOVE_CAMERA",
+        "payload": {"lat": start_lat, "lng": start_lng, "zoom": 15}
+    })
+
+    return {
+        "status": "Route tracée sur la carte",
+        "points": len(path_coords),
+        "distance_km": total_dist,
+    }
 
 
 def move_camera(lat: float, lng: float, zoom: float = 18):
