@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useCallback } from "react";
+import { useState, useCallback, useEffect } from "react";
 import Scene from "@/components/world/Scene";
 import HUD from "@/components/ui/HUD";
 import ChatbotUI from "@/components/ui/ChatbotUI";
@@ -11,6 +11,8 @@ import { AnimatePresence, motion } from "framer-motion";
 import type { TrafficMetrics } from "@/components/simulation/CarSystem";
 import type { AccidentEvent } from "@/components/simulation/accidentTypes";
 import { INITIAL_CENTER, LatLng } from "@/components/world/geo";
+import { useTrafficSocket } from "@/hooks/useTrafficSocket";
+import { AlertTriangle, X } from "lucide-react";
 
 export default function Home() {
     const [showSimulation, setShowSimulation] = useState(false);
@@ -22,6 +24,15 @@ export default function Home() {
     const [accidents, setAccidents] = useState<AccidentEvent[]>([]);
     const [userLocation, setUserLocation] = useState<LatLng>(INITIAL_CENTER);
 
+    const { isConnected, sendSnapshot, sendAccident, alerts, clearAlerts } = useTrafficSocket();
+
+    // Send traffic snapshot to WebSocket whenever metrics update
+    useEffect(() => {
+        if (metrics) {
+            sendSnapshot(metrics);
+        }
+    }, [metrics, sendSnapshot]);
+
     const handleLoadingChange = useCallback((loading: boolean) => {
         setIsLoading(loading);
     }, []);
@@ -29,12 +40,14 @@ export default function Home() {
     const handleAccident = useCallback((event: AccidentEvent) => {
         setAccidents((prev) => {
             if (prev.some((a) => a.id === event.id)) return prev;
+            // Send accident to WebSocket
+            sendAccident(event);
             // Enforce at most 1 corporel + 1 matériel on the map at any time:
             // drop any existing accident of the same type before adding the new one.
             const withoutSameType = prev.filter((a) => a.bodily !== event.bodily);
             return [event, ...withoutSameType];
         });
-    }, []);
+    }, [sendAccident]);
 
     const handleDismiss = useCallback((id: string) => {
         setAccidents((prev) => prev.filter((a) => a.id !== id));
@@ -71,6 +84,31 @@ export default function Home() {
                             accidents={accidents}
                             onUserLocation={setUserLocation}
                         />
+
+                        {/* Congestion Alerts Overlay */}
+                        {alerts.length > 0 && (
+                            <div className="absolute top-24 left-1/2 -translate-x-1/2 flex flex-col gap-2 z-50 pointer-events-none w-full max-w-md">
+                                {alerts.map((alert, i) => (
+                                    <motion.div
+                                        key={i}
+                                        initial={{ opacity: 0, y: -20 }}
+                                        animate={{ opacity: 1, y: 0 }}
+                                        className={`pointer-events-auto flex items-start gap-3 p-4 rounded-xl shadow-2xl backdrop-blur-md border ${
+                                            alert.level === 'danger' ? 'bg-red-500/20 border-red-500/50 text-red-100' : 'bg-orange-500/20 border-orange-500/50 text-orange-100'
+                                        }`}
+                                    >
+                                        <AlertTriangle className={alert.level === 'danger' ? 'text-red-400' : 'text-orange-400'} size={24} />
+                                        <div className="flex-1">
+                                            <h4 className="font-bold">{alert.level === 'danger' ? 'Congestion Sévère' : 'Congestion Modérée'}</h4>
+                                            <p className="text-sm opacity-90">{alert.message}</p>
+                                        </div>
+                                    </motion.div>
+                                ))}
+                                <button onClick={clearAlerts} className="pointer-events-auto self-center mt-2 btn btn-xs btn-ghost text-white/50 hover:text-white">
+                                    <X size={14} className="mr-1"/> Fermer
+                                </button>
+                            </div>
+                        )}
 
                         {/* Road info popup */}
                         {roadInfo && (
