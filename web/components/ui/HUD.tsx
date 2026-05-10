@@ -1,6 +1,8 @@
 "use client";
 
-import { Clock, Navigation, MessageSquare, Loader2 } from "lucide-react";
+import { Navigation, MessageSquare, Loader2, User } from "lucide-react";
+import Link from "next/link";
+import { useAuth } from "@/contexts/AuthContext";
 
 interface HUDProps {
     hour: number;
@@ -10,66 +12,56 @@ interface HUDProps {
     retryAttempt?: number;
 }
 
-export default function HUD({ hour, setHour, toggleChat, isLoading, retryAttempt = 0 }: HUDProps) {
-    const timeLabel = `${hour.toString().padStart(2, '0')}:00`;
-    const peakLabel =
-        (hour >= 7 && hour <= 9) ? "🔴 Heure de pointe (matin)"
-        : (hour >= 16 && hour <= 19) ? "🔴 Heure de pointe (soir)"
-        : (hour >= 10 && hour <= 15) ? "🟡 Trafic modéré"
-        : "🟢 Trafic fluide";
+export default function HUD({ toggleChat, isLoading, retryAttempt = 0 }: HUDProps) {
+    const { user } = useAuth();
 
     return (
-        <div className="fixed inset-0 pointer-events-none p-5 flex flex-col justify-between">
-            {/* Top Bar */}
-            <div className="flex justify-between items-start pointer-events-auto">
-                <div className="bg-slate-950/85 backdrop-blur-lg border border-slate-700/60 px-5 py-3 rounded-2xl shadow-2xl">
+        <div className="fixed inset-x-0 top-0 pointer-events-none p-4 z-50">
+            <div className="flex flex-col md:flex-row justify-between items-start gap-4">
+                {/* Brand & Loading */}
+                <div className="pointer-events-auto bg-base-300/80 backdrop-blur-md border border-white/10 p-4 rounded-2xl shadow-xl min-w-[200px]">
                     <div className="flex items-center gap-3">
-                        <Navigation size={18} className="text-blue-400" />
+                        <div className="bg-primary/20 p-2 rounded-xl">
+                            <Navigation size={20} className="text-primary" />
+                        </div>
                         <div>
-                            <h1 className="text-white font-bold text-base leading-tight tracking-tight">
-                                Jumeau Numérique · Antananarivo
+                            <h1 className="text-white font-bold text-lg leading-none tracking-tight">
+                                AlaminoAI
                             </h1>
-                            <p className="text-slate-400 text-xs">Données routières temps réel — OpenStreetMap</p>
+                            {isLoading && (
+                                <div className="flex items-center gap-2 mt-1 text-primary text-[10px] font-medium uppercase tracking-wider">
+                                    <Loader2 size={10} className="animate-spin" />
+                                    {retryAttempt > 1
+                                        ? `Retry ${retryAttempt}…`
+                                        : "Syncing OSM…"}
+                                </div>
+                            )}
                         </div>
                     </div>
-                    {isLoading && (
-                        <div className="flex items-center gap-2 mt-2 text-blue-400 text-xs">
-                            <Loader2 size={12} className="animate-spin" />
-                            {retryAttempt > 1
-                                ? `Nouvelle tentative ${retryAttempt}…`
-                                : "Chargement du réseau routier…"}
-                        </div>
-                    )}
                 </div>
 
-                <button
-                    onClick={toggleChat}
-                    className="bg-blue-600 hover:bg-blue-500 active:scale-95 text-white p-3 rounded-full shadow-2xl transition-all"
-                >
-                    <MessageSquare size={22} />
-                </button>
-            </div>
+                <div className="flex items-center gap-2 pointer-events-auto">
+                    {/* Auth / Dashboard Link */}
+                    <Link
+                        href={user ? "/dashboard" : "/auth"}
+                        className="btn btn-ghost bg-base-300/80 backdrop-blur-md border-white/10 rounded-full shadow-lg hover:scale-105 transition-transform flex items-center gap-2 px-4"
+                        title={user ? `Espace ${user.role_display}` : "Connexion"}
+                    >
+                        <User size={18} className="text-slate-300" />
+                        {user && (
+                            <span className="text-xs font-bold text-white max-w-[80px] truncate hidden sm:block">
+                                {user.username}
+                            </span>
+                        )}
+                    </Link>
 
-            {/* Bottom Controls */}
-            <div className="bg-slate-950/85 backdrop-blur-lg border border-slate-700/60 p-5 rounded-2xl shadow-2xl pointer-events-auto w-full max-w-lg mx-auto">
-                <div className="flex items-center gap-4 mb-3">
-                    <Clock size={18} className="text-blue-400 shrink-0" />
-                    <span className="text-white font-mono text-lg w-16">{timeLabel}</span>
-                    <input
-                        type="range"
-                        min="0"
-                        max="23"
-                        value={hour}
-                        onChange={(e) => setHour(parseInt(e.target.value))}
-                        className="flex-1 h-2 appearance-none bg-slate-700 rounded-full outline-none cursor-pointer accent-blue-500"
-                    />
-                </div>
-                <p className="text-center text-sm text-slate-300">{peakLabel}</p>
-
-                <div className="grid grid-cols-3 gap-2 text-center text-xs mt-3">
-                    <div className="p-2 rounded-lg bg-green-500/10 border border-green-500/40 text-green-400 font-medium">● Fluide</div>
-                    <div className="p-2 rounded-lg bg-orange-500/10 border border-orange-500/40 text-orange-400 font-medium">● Ralenti</div>
-                    <div className="p-2 rounded-lg bg-red-500/10 border border-red-500/40 text-red-400 font-medium">● Bouchon</div>
+                    {/* Chat Toggle */}
+                    <button
+                        onClick={toggleChat}
+                        className="btn btn-primary btn-circle shadow-lg hover:scale-110 transition-transform"
+                    >
+                        <MessageSquare size={20} />
+                    </button>
                 </div>
             </div>
         </div>

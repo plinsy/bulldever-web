@@ -1,7 +1,7 @@
 "use client";
 
-import { useState } from "react";
-import { Send, X, Bot } from "lucide-react";
+import { useState, useRef, useEffect } from "react";
+import { Send, X, Bot, User } from "lucide-react";
 import axios from "axios";
 import { motion, AnimatePresence } from "framer-motion";
 
@@ -13,6 +13,13 @@ export default function ChatbotUI({ isOpen, onClose }: { isOpen: boolean, onClos
     ]);
     const [input, setInput] = useState("");
     const [loading, setLoading] = useState(false);
+    const scrollRef = useRef<HTMLDivElement>(null);
+
+    useEffect(() => {
+        if (scrollRef.current) {
+            scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
+        }
+    }, [messages]);
 
     const handleSend = async () => {
         if (!input.trim()) return;
@@ -35,51 +42,80 @@ export default function ChatbotUI({ isOpen, onClose }: { isOpen: boolean, onClos
         <AnimatePresence>
             {isOpen && (
                 <motion.div 
-                    initial={{ x: 400 }}
+                    initial={{ x: '100%' }}
                     animate={{ x: 0 }}
-                    exit={{ x: 400 }}
-                    className="fixed right-0 top-0 h-full w-96 bg-slate-900 border-l border-slate-700 shadow-2xl z-50 flex flex-col"
+                    exit={{ x: '100%' }}
+                    transition={{ type: "spring", damping: 25, stiffness: 200 }}
+                    className="fixed right-0 top-0 h-full w-full sm:w-96 bg-base-300 border-l border-white/10 shadow-2xl z-[70] flex flex-col"
                 >
-                    <div className="p-4 border-b border-slate-700 flex justify-between items-center bg-slate-800">
-                        <div className="flex items-center gap-2 text-white font-bold">
-                            <Bot className="text-blue-400" />
-                            Assistant Tana
+                    {/* Header */}
+                    <div className="p-4 border-b border-white/10 flex justify-between items-center bg-base-200">
+                        <div className="flex items-center gap-3">
+                            <div className="avatar placeholder">
+                                <div className="bg-primary/20 text-primary rounded-xl w-10">
+                                    <Bot size={20} />
+                                </div>
+                            </div>
+                            <div>
+                                <h2 className="text-white font-bold text-sm">Assistant Tana</h2>
+                                <div className="flex items-center gap-1.5">
+                                    <div className="badge badge-success badge-xs animate-pulse" />
+                                    <span className="text-[10px] text-slate-500 font-bold uppercase tracking-widest">En ligne</span>
+                                </div>
+                            </div>
                         </div>
-                        <button onClick={onClose} className="text-slate-400 hover:text-white">
+                        <button onClick={onClose} className="btn btn-ghost btn-sm btn-circle">
                             <X size={20} />
                         </button>
                     </div>
 
-                    <div className="flex-1 overflow-y-auto p-4 space-y-4">
+                    {/* Chat area */}
+                    <div ref={scrollRef} className="flex-1 overflow-y-auto p-4 space-y-2 custom-scrollbar">
                         {messages.map((m, i) => (
-                            <div key={i} className={`flex ${m.role === 'user' ? 'justify-end' : 'justify-start'}`}>
-                                <div className={`max-w-[80%] p-3 rounded-2xl text-sm ${
-                                    m.role === 'user' ? 'bg-blue-600 text-white' : 'bg-slate-800 text-slate-200'
+                            <div key={i} className={`chat ${m.role === 'user' ? 'chat-end' : 'chat-start'}`}>
+                                <div className="chat-image avatar">
+                                    <div className="w-8 rounded-full bg-base-100 p-1.5 border border-white/5">
+                                        {m.role === 'user' ? <User size={16} /> : <Bot size={16} className="text-primary" />}
+                                    </div>
+                                </div>
+                                <div className={`chat-bubble text-sm ${
+                                    m.role === 'user' ? 'chat-bubble-primary' : 'bg-base-100 text-slate-200'
                                 }`}>
                                     {m.text}
                                 </div>
                             </div>
                         ))}
-                        {loading && <div className="text-slate-500 text-xs italic">L'IA réfléchit...</div>}
+                        {loading && (
+                            <div className="chat chat-start">
+                                <div className="chat-bubble bg-base-100 text-slate-500 text-xs italic flex gap-2 items-center">
+                                    <span className="loading loading-dots loading-xs"></span>
+                                    Réflexion en cours...
+                                </div>
+                            </div>
+                        )}
                     </div>
 
-                    <div className="p-4 bg-slate-800 border-t border-slate-700">
-                        <div className="flex gap-2">
+                    {/* Input area */}
+                    <div className="p-4 bg-base-200 border-t border-white/10">
+                        <div className="join w-full">
                             <input 
                                 type="text" 
                                 value={input}
                                 onChange={(e) => setInput(e.target.value)}
                                 onKeyDown={(e) => e.key === 'Enter' && handleSend()}
                                 placeholder="Posez une question..."
-                                className="flex-1 bg-slate-900 border border-slate-600 rounded-lg px-4 py-2 text-white focus:outline-none focus:border-blue-500"
+                                className="input input-bordered join-item flex-1 focus:input-primary bg-base-100 text-sm"
                             />
                             <button 
                                 onClick={handleSend}
-                                className="bg-blue-600 p-2 rounded-lg text-white hover:bg-blue-500 transition-colors"
+                                className="btn btn-primary join-item px-4"
                             >
-                                <Send size={20} />
+                                <Send size={18} />
                             </button>
                         </div>
+                        <p className="text-[10px] text-slate-600 mt-3 text-center uppercase tracking-widest font-bold">
+                            AlaminoAI Intelligence v2.1
+                        </p>
                     </div>
                 </motion.div>
             )}
