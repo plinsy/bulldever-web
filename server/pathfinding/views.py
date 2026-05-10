@@ -75,7 +75,7 @@ class ShortestPathView(APIView):
             
             for i, node_id in enumerate(path_nodes):
                 lat, lng = _parse_node_id(node_id)
-                path_coords.append({"lat": lat, "lng": lng})
+                path_coords.append([lat, lng])
                 
                 # Calculer la distance entre les nœuds consécutifs (sans facteur density)
                 if i > 0:
@@ -83,9 +83,16 @@ class ShortestPathView(APIView):
                     segment_distance = haversine(prev_lat, prev_lng, lat, lng)
                     total_distance += segment_distance
             
+            # Convertir la distance en km et estimer la durée (30 km/h vitesse moyenne ville)
+            distance_km = round(total_distance / 1000, 3)
+            avg_speed_kmh = 30.0
+            duration_minutes = max(1, round((distance_km / avg_speed_kmh) * 60))
+            
             # Construire la réponse
             response_data = {
                 "path": path_coords,
+                "distance_km": distance_km,
+                "duration_minutes": duration_minutes,
                 "total_distance_m": round(total_distance, 2),
                 "node_count": len(path_nodes),
                 "start_snapped": {

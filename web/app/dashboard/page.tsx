@@ -1,7 +1,8 @@
 "use client";
 
-import { useEffect, useState, type FormEvent } from "react";
+import { useEffect, useState, useCallback, type FormEvent } from "react";
 import { useRouter } from "next/navigation";
+import dynamic from "next/dynamic";
 import {
     Navigation,
     LogOut,
@@ -16,7 +17,15 @@ import {
     Siren,
     LayoutDashboard,
     ExternalLink,
+    MapPin,
 } from "lucide-react";
+
+const MapPickerModal = dynamic(
+    () => import("@/components/ui/MapPickerModal"),
+    { ssr: false }
+);
+
+type PickedPoints = { origin: [number, number] | null; destination: [number, number] | null };
 import { useAuth } from "@/contexts/AuthContext";
 import RequireAuth from "@/components/auth/RequireAuth";
 import {
@@ -140,52 +149,91 @@ function BlockedRoadsTab() {
 }
 
 function BestPathTab() {
-    const [startLat, setStartLat] = useState("-18.914");
-    const [startLng, setStartLng] = useState("47.536");
-    const [endLat, setEndLat] = useState("-18.893");
-    const [endLng, setEndLng] = useState("47.532");
+    const [points, setPoints] = useState<PickedPoints>({ origin: null, destination: null });
+    const [mapOpen, setMapOpen] = useState(false);
+    const [pickingStep, setPickingStep] = useState<"origin" | "destination">("origin");
     const [result, setResult] = useState<PathResult | null>(null);
     const [loading, setLoading] = useState(false);
     const [error, setError] = useState<string | null>(null);
 
+    const handleMapClick = useCallback((lat: number, lng: number) => {
+        setPoints((prev) => {
+            if (pickingStep === "origin") return { ...prev, origin: [lat, lng] };
+            return { ...prev, destination: [lat, lng] };
+        });
+        setPickingStep((s) => (s === "origin" ? "destination" : "destination"));
+    }, [pickingStep]);
+
+    const handleConfirm = useCallback(() => {
+        setMapOpen(false);
+        setPickingStep("origin");
+    }, []);
+
     async function handleSubmit(e: FormEvent) {
         e.preventDefault();
+        if (!points.origin || !points.destination) return;
         setError(null);
         setLoading(true);
         try {
-            const res = await fetchBestPath(parseFloat(startLat), parseFloat(startLng), parseFloat(endLat), parseFloat(endLng));
+            const res = await fetchBestPath(points.origin[0], points.origin[1], points.destination[0], points.destination[1]);
             setResult(res);
-        } catch {
-            setError("Impossible de calculer l'itinéraire. Vérifiez les coordonnées.");
+        } catch (err: unknown) {
+            const apiMsg =
+                (err as { response?: { data?: { error?: string } } })?.response?.data?.error;
+            setError(apiMsg ?? "Impossible de calculer l'itinéraire. Vérifiez les points sélectionnés.");
         } finally {
             setLoading(false);
         }
     }
 
+    const fmt = (p: [number, number] | null) =>
+        p ? `${p[0].toFixed(4)}, ${p[1].toFixed(4)}` : "Non sélectionné";
+
     return (
         <div>
             <p className="text-slate-400 text-sm mb-4">
-                Entrez les coordonnées GPS de votre départ et de votre destination.
+                Sélectionnez votre point de départ et votre destination sur la carte.
             </p>
-            <form onSubmit={handleSubmit} className="space-y-3">
-                <fieldset>
-                    <legend className="text-slate-300 text-xs font-semibold uppercase tracking-wide mb-2">Point de départ</legend>
-                    <div className="grid grid-cols-2 gap-2">
-                        <input type="number" step="any" value={startLat} onChange={(e) => setStartLat(e.target.value)} required placeholder="Latitude" className="bg-slate-800 border border-slate-600 text-white rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-blue-500" />
-                        <input type="number" step="any" value={startLng} onChange={(e) => setStartLng(e.target.value)} required placeholder="Longitude" className="bg-slate-800 border border-slate-600 text-white rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-blue-500" />
-                    </div>
-                </fieldset>
-                <fieldset>
-                    <legend className="text-slate-300 text-xs font-semibold uppercase tracking-wide mb-2">Destination</legend>
-                    <div className="grid grid-cols-2 gap-2">
-                        <input type="number" step="any" value={endLat} onChange={(e) => setEndLat(e.target.value)} required placeholder="Latitude" className="bg-slate-800 border border-slate-600 text-white rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-blue-500" />
-                        <input type="number" step="any" value={endLng} onChange={(e) => setEndLng(e.target.value)} required placeholder="Longitude" className="bg-slate-800 border border-slate-600 text-white rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-blue-500" />
-                    </div>
-                </fieldset>
 
+            <button
+                type="button"
+                onClick={() => { setPickingStep("origin"); setMapOpen(true); }}
+                className="w-full mb-4 flex items-center justify-center gap-2 border-2 border-dashed border-blue-600/50 hover:border-blue-500 bg-blue-950/20 hover:bg-blue-950/40 text-blue-400 hover:text-blue-300 rounded-xl py-3 text-sm font-medium transition-colors"
+            >
+                <MapPin size={16} />
+                {points.origin && points.destination ? "Modifier la sélection sur la carte" : "Sélectionner sur la carte"}
+            </button>
+
+            {/* Summary of selected points */}
+            <div className="grid grid-cols-2 gap-2 mb-4">
+                <div className="bg-slate-800/60 rounded-lg px-3 py-2 text-xs">
+                    <p className="text-slate-500 mb-0.5 flex items-center gap-1">
+                        <span className="w-2 h-2 rounded-full bg-green-500 inline-block" />
+                        Départ
+                    </p>
+                    <p className={`font-medium ${points.origin ? "text-green-300" : "text-slate-600 italic"}`}>
+                        {fmt(points.origin)}
+                    </p>
+                </div>
+                <div className="bg-slate-800/60 rounded-lg px-3 py-2 text-xs">
+                    <p className="text-slate-500 mb-0.5 flex items-center gap-1">
+                        <span className="w-2 h-2 rounded-full bg-red-500 inline-block" />
+                        Destination
+                    </p>
+                    <p className={`font-medium ${points.destination ? "text-red-300" : "text-slate-600 italic"}`}>
+                        {fmt(points.destination)}
+                    </p>
+                </div>
+            </div>
+
+            <form onSubmit={handleSubmit} className="space-y-3">
                 {error && <p className="text-red-400 text-sm bg-red-950/30 border border-red-800 rounded-lg px-3 py-2">{error}</p>}
 
-                <button type="submit" disabled={loading} className="w-full bg-blue-600 hover:bg-blue-500 disabled:opacity-50 text-white font-medium py-2.5 rounded-lg text-sm transition-colors flex items-center justify-center gap-2">
+                <button
+                    type="submit"
+                    disabled={loading || !points.origin || !points.destination}
+                    className="w-full bg-blue-600 hover:bg-blue-500 disabled:opacity-50 text-white font-medium py-2.5 rounded-lg text-sm transition-colors flex items-center justify-center gap-2"
+                >
                     {loading ? <Loader2 size={14} className="animate-spin" /> : <ChevronRight size={14} />}
                     Calculer le meilleur chemin
                 </button>
@@ -198,54 +246,104 @@ function BestPathTab() {
                     <p className="text-slate-300 text-sm">Durée estimée : <span className="text-white font-medium">{result.duration_minutes ?? "—"} min</span></p>
                 </div>
             )}
+
+            <MapPickerModal
+                open={mapOpen}
+                points={points}
+                pickingStep={pickingStep}
+                onMapClick={handleMapClick}
+                onConfirm={handleConfirm}
+                onClose={() => setMapOpen(false)}
+                onStepChange={setPickingStep}
+            />
         </div>
     );
 }
 
 function DeparturePredictionTab() {
-    const [originLat, setOriginLat] = useState("-18.914");
-    const [originLng, setOriginLng] = useState("47.536");
-    const [destLat, setDestLat] = useState("-18.893");
-    const [destLng, setDestLng] = useState("47.532");
+    const [points, setPoints] = useState<PickedPoints>({ origin: null, destination: null });
+    const [mapOpen, setMapOpen] = useState(false);
+    const [pickingStep, setPickingStep] = useState<"origin" | "destination">("origin");
     const [arrivalTime, setArrivalTime] = useState("08:00");
     const [result, setResult] = useState<DeparturePrediction | null>(null);
     const [loading, setLoading] = useState(false);
     const [error, setError] = useState<string | null>(null);
 
+    const handleMapClick = useCallback((lat: number, lng: number) => {
+        setPoints((prev) => {
+            if (pickingStep === "origin") return { ...prev, origin: [lat, lng] };
+            return { ...prev, destination: [lat, lng] };
+        });
+        setPickingStep((s) => (s === "origin" ? "destination" : "destination"));
+    }, [pickingStep]);
+
+    const handleConfirm = useCallback(() => {
+        setMapOpen(false);
+        setPickingStep("origin");
+    }, []);
+
     async function handleSubmit(e: FormEvent) {
         e.preventDefault();
+        if (!points.origin || !points.destination) return;
         setError(null);
         setLoading(true);
         try {
-            const res = await fetchDeparturePrediction(parseFloat(originLat), parseFloat(originLng), parseFloat(destLat), parseFloat(destLng), arrivalTime);
+            const res = await fetchDeparturePrediction(
+                points.origin[0], points.origin[1],
+                points.destination[0], points.destination[1],
+                arrivalTime
+            );
             setResult(res);
-        } catch {
-            setError("Impossible de calculer la prédiction. Vérifiez les données.");
+        } catch (err: unknown) {
+            const apiMsg =
+                (err as { response?: { data?: { error?: string } } })?.response?.data?.error;
+            setError(apiMsg ?? "Impossible de calculer la prédiction. Vérifiez les données.");
         } finally {
             setLoading(false);
         }
     }
 
+    const fmt = (p: [number, number] | null) =>
+        p ? `${p[0].toFixed(4)}, ${p[1].toFixed(4)}` : "Non sélectionné";
+
     return (
         <div>
             <p className="text-slate-400 text-sm mb-4">
-                Indiquez votre trajet et l&apos;heure d&apos;arrivée souhaitée pour connaître la meilleure heure de départ.
+                Sélectionnez votre trajet sur la carte et indiquez l&apos;heure d&apos;arrivée souhaitée.
             </p>
+
+            <button
+                type="button"
+                onClick={() => { setPickingStep("origin"); setMapOpen(true); }}
+                className="w-full mb-4 flex items-center justify-center gap-2 border-2 border-dashed border-blue-600/50 hover:border-blue-500 bg-blue-950/20 hover:bg-blue-950/40 text-blue-400 hover:text-blue-300 rounded-xl py-3 text-sm font-medium transition-colors"
+            >
+                <MapPin size={16} />
+                {points.origin && points.destination ? "Modifier la sélection sur la carte" : "Sélectionner sur la carte"}
+            </button>
+
+            {/* Summary of selected points */}
+            <div className="grid grid-cols-2 gap-2 mb-4">
+                <div className="bg-slate-800/60 rounded-lg px-3 py-2 text-xs">
+                    <p className="text-slate-500 mb-0.5 flex items-center gap-1">
+                        <span className="w-2 h-2 rounded-full bg-green-500 inline-block" />
+                        Départ
+                    </p>
+                    <p className={`font-medium ${points.origin ? "text-green-300" : "text-slate-600 italic"}`}>
+                        {fmt(points.origin)}
+                    </p>
+                </div>
+                <div className="bg-slate-800/60 rounded-lg px-3 py-2 text-xs">
+                    <p className="text-slate-500 mb-0.5 flex items-center gap-1">
+                        <span className="w-2 h-2 rounded-full bg-red-500 inline-block" />
+                        Destination
+                    </p>
+                    <p className={`font-medium ${points.destination ? "text-red-300" : "text-slate-600 italic"}`}>
+                        {fmt(points.destination)}
+                    </p>
+                </div>
+            </div>
+
             <form onSubmit={handleSubmit} className="space-y-3">
-                <fieldset>
-                    <legend className="text-slate-300 text-xs font-semibold uppercase tracking-wide mb-2">Départ</legend>
-                    <div className="grid grid-cols-2 gap-2">
-                        <input type="number" step="any" value={originLat} onChange={(e) => setOriginLat(e.target.value)} required placeholder="Latitude" className="bg-slate-800 border border-slate-600 text-white rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-blue-500" />
-                        <input type="number" step="any" value={originLng} onChange={(e) => setOriginLng(e.target.value)} required placeholder="Longitude" className="bg-slate-800 border border-slate-600 text-white rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-blue-500" />
-                    </div>
-                </fieldset>
-                <fieldset>
-                    <legend className="text-slate-300 text-xs font-semibold uppercase tracking-wide mb-2">Destination</legend>
-                    <div className="grid grid-cols-2 gap-2">
-                        <input type="number" step="any" value={destLat} onChange={(e) => setDestLat(e.target.value)} required placeholder="Latitude" className="bg-slate-800 border border-slate-600 text-white rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-blue-500" />
-                        <input type="number" step="any" value={destLng} onChange={(e) => setDestLng(e.target.value)} required placeholder="Longitude" className="bg-slate-800 border border-slate-600 text-white rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-blue-500" />
-                    </div>
-                </fieldset>
                 <div>
                     <label className="block text-slate-300 text-xs font-semibold uppercase tracking-wide mb-2">Heure d&apos;arrivée souhaitée</label>
                     <input type="time" value={arrivalTime} onChange={(e) => setArrivalTime(e.target.value)} required className="w-full bg-slate-800 border border-slate-600 text-white rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-blue-500" />
@@ -253,7 +351,11 @@ function DeparturePredictionTab() {
 
                 {error && <p className="text-red-400 text-sm bg-red-950/30 border border-red-800 rounded-lg px-3 py-2">{error}</p>}
 
-                <button type="submit" disabled={loading} className="w-full bg-blue-600 hover:bg-blue-500 disabled:opacity-50 text-white font-medium py-2.5 rounded-lg text-sm transition-colors flex items-center justify-center gap-2">
+                <button
+                    type="submit"
+                    disabled={loading || !points.origin || !points.destination}
+                    className="w-full bg-blue-600 hover:bg-blue-500 disabled:opacity-50 text-white font-medium py-2.5 rounded-lg text-sm transition-colors flex items-center justify-center gap-2"
+                >
                     {loading ? <Loader2 size={14} className="animate-spin" /> : <ChevronRight size={14} />}
                     Calculer l&apos;heure de sortie idéale
                 </button>
@@ -290,6 +392,16 @@ function DeparturePredictionTab() {
                     )}
                 </div>
             )}
+
+            <MapPickerModal
+                open={mapOpen}
+                points={points}
+                pickingStep={pickingStep}
+                onMapClick={handleMapClick}
+                onConfirm={handleConfirm}
+                onClose={() => setMapOpen(false)}
+                onStepChange={setPickingStep}
+            />
         </div>
     );
 }

@@ -100,6 +100,9 @@ export interface PathResult {
     distance_km: number;
     duration_minutes: number;
     path: [number, number][];
+    node_count?: number;
+    start_snapped?: { lat: number; lng: number };
+    end_snapped?: { lat: number; lng: number };
 }
 
 export async function fetchBestPath(
