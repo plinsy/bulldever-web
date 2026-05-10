@@ -9,10 +9,15 @@ from .serializers import (
     TrafficSnapshotSerializer, TrafficSnapshotIngestSerializer,
     AccidentSerializer, AccidentReportSerializer,
 )
+import os
+import threading
+from dotenv import load_dotenv
 from google import genai
 from google.genai import types
-import os
-from dotenv import load_dotenv
+from pathfinding.graph import build_graph, dijkstra, nearest_node, _parse_node_id
+
+# Thread-local storage to capture actions during tool execution
+request_context = threading.local()
 
 load_dotenv()
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
@@ -95,7 +100,7 @@ def get_traffic_stats(zone_id: str = None):
             "zone": zone_id,
             "total_cars": total,
             "stopped_cars": stopped,
-            "congestion_level": f"{round((stopped / total) * 100)}%" if isinstance(total, int) and total > 0 else "N/A"
+            "congestion_level": f"{round((stopped / total) * 100)}%" if isinstance(total, int) and total > 0 else "0%"
         }
     
     return {
@@ -128,11 +133,56 @@ def predict_zone_congestion(zone_id: str):
         "prediction": "Risque élevé de bouchon" if trend == "en augmentation" and vals[0] > 5 else "Trafic fluide attendu"
     }
 
+def find_route(start_lat: float, start_lng: float, end_lat: float, end_lng: float):
+    """
+    Calcule le meilleur itinéraire entre deux points GPS et l'affiche sur la carte.
+    """
+    try:
+        graph = build_graph()
+        if not graph: return {"error": "Graphe non disponible"}
+        
+        graph_nodes = list(graph.keys())
+        start_node = nearest_node(start_lat, start_lng, graph_nodes)
+        end_node = nearest_node(end_lat, end_lng, graph_nodes)
+        
+        path_nodes = dijkstra(graph, start_node, end_node)
+        if not path_nodes: return {"error": "Aucun chemin trouvé"}
+        
+        path_coords = []
+        for node_id in path_nodes:
+            lat, lng = _parse_node_id(node_id)
+            path_coords.append({"lat": lat, "lng": lng})
+            
+        # Register action for the frontend
+        if not hasattr(request_context, 'actions'): request_context.actions = []
+        request_context.actions.append({
+            "type": "SET_PATH",
+            "payload": path_coords
+        })
+        
+        return {"status": "Route trouvée", "points": len(path_coords)}
+    except Exception as e:
+        return {"error": str(e)}
+
+def move_camera(lat: float, lng: float, zoom: float = 18):
+    """
+    Déplace la caméra de la carte vers une position spécifique (lat, lng).
+    """
+    if not hasattr(request_context, 'actions'): request_context.actions = []
+    request_context.actions.append({
+        "type": "MOVE_CAMERA",
+        "payload": {"lat": lat, "lng": lng, "zoom": zoom}
+    })
+    return {"status": "Caméra déplacée"}
+
 # --- END AI TOOLS ---
 
 class ChatbotView(APIView):
     def post(self, request):
         user_query = request.data.get('query')
+        
+        # Initialize context for this request
+        request_context.actions = []
         
         try:
             if not GEMINI_API_KEY:
@@ -144,22 +194,31 @@ class ChatbotView(APIView):
             model_id = "gemma-4-26b-a4b-it" 
 
             system_instruction = """
-            Vous êtes AlaminoAI, l'assistant expert du Jumeau Numérique d'Antananarivo.
+            Vous êtes AlaminoAI, l'assistant expert et contrôleur de la carte d'Antananarivo.
             
             VOS CAPACITÉS :
-            - Vous pouvez consulter les statistiques réelles via 'get_traffic_stats'.
-            - Vous pouvez prédire l'évolution via 'predict_zone_congestion'.
-            - Vous répondez en Français ou Malgache.
+            - Consulter les stats via 'get_traffic_stats'.
+            - Prédire l'évolution via 'predict_zone_congestion'.
+            - Calculer et AFFICHER un itinéraire via 'find_route'. Vous devez demander les coordonnées ou utiliser des points connus.
+            - Déplacer la caméra via 'move_camera'.
             
-            CONSEILS :
-            - Si l'utilisateur demande "comment est le trafic ?", appelez 'get_traffic_stats'.
-            - Soyez précis et utilisez les chiffres retournés par vos outils.
+            POINTS CONNUS (lat, lng) :
+            - Analakely: -18.905, 47.525
+            - Anosizato: -18.935, 47.502
+            - Isotry: -18.902, 47.514
+            - 67Ha: -18.898, 47.508
+            - Ivato: -18.796, 47.478
+            
+            RÈGLES :
+            - Si l'utilisateur veut aller d'un point à un autre, utilisez 'find_route'.
+            - Si l'utilisateur veut voir un endroit, utilisez 'move_camera'.
+            - Répondez en Français ou Malgache.
             """
 
             # Automatic Function Calling configuration
             generate_content_config = types.GenerateContentConfig(
                 system_instruction=system_instruction,
-                tools=[get_traffic_stats, predict_zone_congestion]
+                tools=[get_traffic_stats, predict_zone_congestion, find_route, move_camera]
             )
             
             response = client.models.generate_content(
@@ -168,7 +227,10 @@ class ChatbotView(APIView):
                 config=generate_content_config
             )
             
-            return Response({'response': response.text})
+            return Response({
+                'response': response.text,
+                'actions': request_context.actions
+            })
 
         except Exception as e:
             print(f"Chatbot Tool Error: {str(e)}")

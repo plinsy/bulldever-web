@@ -128,6 +128,28 @@ function OsmBuildings({ buildings }: { buildings: OsmBuilding[] }) {
   );
 }
 
+/**
+ * Visualise un chemin (ligne verte) sur la carte
+ */
+function PathVisualizer({ path }: { path: {lat: number, lng: number}[] }) {
+  const points = useMemo(() => {
+    return path.map(p => {
+      const x = (p.lng - INITIAL_CENTER.lng) * METER;
+      const z = (p.lat - INITIAL_CENTER.lat) * METER;
+      return new THREE.Vector3(x, 0.15, z); // Slightly above ground
+    });
+  }, [path]);
+
+  if (points.length < 2) return null;
+
+  return (
+    <line>
+      <bufferGeometry attach="geometry" setFromPoints={points} />
+      <lineBasicMaterial attach="material" color="#4ade80" linewidth={8} transparent opacity={0.9} />
+    </line>
+  );
+}
+
 interface SceneProps {
   hour: number;
   onRoadInfo: (info: string) => void;
@@ -139,9 +161,10 @@ interface SceneProps {
 
 interface WorldContentProps extends SceneProps {
     center: LatLng;
+    activePath: {lat: number, lng: number}[];
 }
 
-function WorldContent({ hour, onRoadInfo, onLoadingChange, onMetrics, onAccident, accidents = [], center }: WorldContentProps) {
+function WorldContent({ hour, onRoadInfo, onLoadingChange, onMetrics, onAccident, accidents = [], center, activePath }: WorldContentProps) {
   const { roads, loading: roadsLoading } = useOsmRoads(center);
   const { buildings, loading: bldgLoading } = useOsmBuildings(center);
   const [trafficData, setTrafficData] = useState<Record<number, number>>({});
@@ -205,6 +228,7 @@ function WorldContent({ hour, onRoadInfo, onLoadingChange, onMetrics, onAccident
 
       <Ground />
       <OsmBuildings buildings={buildings} />
+      <PathVisualizer path={activePath} />
       
       {!roadsLoading && (
         <RoadNetwork 
@@ -265,15 +289,37 @@ function WorldContent({ hour, onRoadInfo, onLoadingChange, onMetrics, onAccident
 
 export default function Scene(props: SceneProps) {
   const [center, setCenter] = useState<LatLng>(INITIAL_CENTER);
+  const [activePath, setActivePath] = useState<{lat: number, lng: number}[]>([]);
 
   const move = (latD: number, lngD: number) => {
     setCenter(prev => ({ lat: prev.lat + latD, lng: prev.lng + lngD }));
   };
 
+  // Écouter les actions de l'IA (depuis ChatbotUI)
+  useEffect(() => {
+    const handleMapAction = (e: any) => {
+      const action = e.detail;
+      console.log("Scene received AI action:", action);
+
+      if (action.type === 'SET_PATH') {
+        setActivePath(action.payload);
+        // On centre sur le début du chemin
+        if (action.payload.length > 0) {
+          setCenter({ lat: action.payload[0].lat, lng: action.payload[0].lng });
+        }
+      } else if (action.type === 'MOVE_CAMERA') {
+        setCenter({ lat: action.payload.lat, lng: action.payload.lng });
+      }
+    };
+
+    window.addEventListener('MAP_ACTION', handleMapAction);
+    return () => window.removeEventListener('MAP_ACTION', handleMapAction);
+  }, []);
+
   return (
     <div className="relative w-full h-screen">
       <Canvas shadows camera={{ position: [20, 20, 20], fov: 45 }}>
-        <WorldContent {...props} center={center} />
+        <WorldContent {...props} center={center} activePath={activePath} />
       </Canvas>
 
       {/* Navigation UI Overlay */}

@@ -1,6 +1,6 @@
 services:
   db:
-    image: postgis/postgis:15-3.3-alpine
+    image: kartoza/postgis:16
     environment:
       POSTGRES_DB: bulldever
       POSTGRES_USER: user

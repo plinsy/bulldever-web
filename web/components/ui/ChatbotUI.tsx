@@ -31,6 +31,13 @@ export default function ChatbotUI({ isOpen, onClose }: { isOpen: boolean, onClos
         try {
             const res = await axios.post(`${API_BASE}/chatbot/`, { query: userMsg });
             setMessages(prev => [...prev, { role: 'bot', text: res.data.response }]);
+
+            // Handle actions from the chatbot
+            if (res.data.actions && res.data.actions.length > 0) {
+                res.data.actions.forEach((action: any) => {
+                    window.dispatchEvent(new CustomEvent('MAP_ACTION', { detail: action }));
+                });
+            }
         } catch (err) {
             setMessages(prev => [...prev, { role: 'bot', text: "Désolé, je ne parviens pas à me connecter au serveur." }]);
         } finally {
