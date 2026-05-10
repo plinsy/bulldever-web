@@ -347,7 +347,13 @@ function WorldContent({ hour, onRoadInfo, onLoadingChange, onMetrics, onAccident
             center={center}
             onAccident={onAccident}
             signalMapRef={signalMapRef}
-            hotspots={accidents}
+            hotspots={accidents.map(a => ({
+              x: a.position.x,
+              z: a.position.z,
+              count: 1,
+              bodily_count: a.bodily ? 1 : 0,
+              severity: a.bodily ? "high" : "medium"
+            }))}
             dynamicZones={dynamicZones}
           />
         </>
