@@ -19,10 +19,17 @@ services:
       - "8000:8000"
     environment:
       - DATABASE_URL=postgres://user:password@db:5432/bulldever
+      - DJANGO_SETTINGS_MODULE=server.settings
       - DEBUG=True
       - GEMINI_API_KEY=${GEMINI_API_KEY}
     depends_on:
       - db
+      - redis
+
+  redis:
+    image: redis:alpine
+    ports:
+      - "6379:6379"
 
   web:
     build: ./web

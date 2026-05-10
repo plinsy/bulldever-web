@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useRef, useState } from "react";
+import { useMemo, useRef, useState, useEffect } from "react";
 import * as THREE from "three";
 import * as BufferGeometryUtils from "three/examples/jsm/utils/BufferGeometryUtils.js";
 import { OsmRoad, LatLng, ROAD_WIDTHS } from "../world/geo";
@@ -21,8 +21,8 @@ const API_BASE = "http://localhost:8000/api";
 const STOPPED_SPEED_THRESHOLD = 0.0003;
 // Intersection detection radius in scene units
 const INTERSECTION_RADIUS = 10 * METER;
-// How often (ms) to POST metrics to the backend
-const SNAPSHOT_INTERVAL_MS = 5000;
+// How often (ms) to POST metrics to the backend (30s is enough for trend analysis)
+const SNAPSHOT_INTERVAL_MS = 30000;
 
 export interface ZoneStat {
     total: number;
@@ -114,37 +114,46 @@ function sceneSpeedToKmh(sceneUnitsPerFrame: number, fps = 60): number {
     return metersPerSecond * 3.6;
 }
 
-async function postAccident(x: number, z: number, bodily: boolean): Promise<void> {
-    try {
-        await fetch(`${API_BASE}/accidents/`, {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ scene_x: x, scene_z: z, bodily }),
-        });
-    } catch {
-        // Network errors are non-fatal; simulation continues
+async function postAccident(ws: WebSocket | null, x: number, z: number, bodily: boolean): Promise<void> {
+    if (ws && ws.readyState === WebSocket.OPEN) {
+        ws.send(JSON.stringify({
+            action: 'accident',
+            payload: { scene_x: x, scene_z: z, bodily }
+        }));
+    } else {
+        try {
+            await fetch(`${API_BASE}/accidents/`, {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ scene_x: x, scene_z: z, bodily }),
+            });
+        } catch {}
     }
 }
 
-async function postSnapshot(metrics: TrafficMetrics, hour: number): Promise<void> {
-    try {
-        await fetch(`${API_BASE}/traffic-stats/`, {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-                sim_hour: hour,
-                total_cars: metrics.totalCars,
-                stopped_cars: metrics.stoppedCars,
-                cars_in_intersections: metrics.carsInIntersections,
-                avg_speed_kmh: metrics.avgSpeedKmh,
-                zone_counts: Object.fromEntries(
-                    Object.entries(metrics.zoneStats).map(([id, stat]) => [id, stat.stopped])
-                ),
-                intersection_counts: metrics.intersectionCounts,
-            }),
-        });
-    } catch {
-        // Network errors are non-fatal; simulation continues
+async function sendSnapshot(ws: WebSocket | null, metrics: TrafficMetrics, hour: number): Promise<void> {
+    const payload = {
+        sim_hour: hour,
+        total_cars: metrics.totalCars,
+        stopped_cars: metrics.stoppedCars,
+        cars_in_intersections: metrics.carsInIntersections,
+        avg_speed_kmh: metrics.avgSpeedKmh,
+        zone_counts: Object.fromEntries(
+            Object.entries(metrics.zoneStats).map(([id, stat]) => [id, stat.stopped])
+        ),
+        intersection_counts: metrics.intersectionCounts,
+    };
+
+    if (ws && ws.readyState === WebSocket.OPEN) {
+        ws.send(JSON.stringify({ action: 'snapshot', payload }));
+    } else {
+        try {
+            await fetch(`${API_BASE}/traffic-stats/`, {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify(payload),
+            });
+        } catch {}
     }
 }
 
@@ -160,6 +169,17 @@ export default function CarSystem({ roads, hour, onMetrics, center, onAccident, 
     const [selectedIdx, setSelectedIdx] = useState<number | null>(null);
     const collidedPairsRef = useRef<Set<string>>(new Set());
     const frameCountRef = useRef<number>(0);
+    const wsRef = useRef<WebSocket | null>(null);
+
+    useEffect(() => {
+        const ws = new WebSocket("ws://localhost:8000/ws/traffic/");
+        wsRef.current = ws;
+        ws.onopen = () => console.log("Traffic WS Connected");
+        ws.onclose = () => console.log("Traffic WS Disconnected");
+        return () => {
+            if (ws.readyState === WebSocket.OPEN) ws.close();
+        };
+    }, []);
 
     const intersections = useMemo(() => deriveIntersections(roads, center), [roads, center]);
 
@@ -644,7 +664,7 @@ export default function CarSystem({ roads, hour, onMetrics, center, onAccident, 
                             bodily,
                             timestamp: Date.now(),
                         });
-                        postAccident(midpoint.x, midpoint.z, bodily);
+                        postAccident(wsRef.current, midpoint.x, midpoint.z, bodily);
                     }
                 }
             }
@@ -666,7 +686,7 @@ export default function CarSystem({ roads, hour, onMetrics, center, onAccident, 
         const now = state.clock.getElapsedTime() * 1000;
         if (now - lastSnapshotRef.current >= SNAPSHOT_INTERVAL_MS) {
             lastSnapshotRef.current = now;
-            postSnapshot(metrics, hour);
+            sendSnapshot(wsRef.current, metrics, hour);
         }
     });
 

@@ -20,4 +20,4 @@ ENV PATH="/app/.venv/bin:$PATH" \
 
 EXPOSE 8000
 
-CMD ["python", "manage.py", "runserver", "0.0.0.0:8000"]
+CMD ["uv", "run", "daphne", "-b", "0.0.0.0", "-p", "8000", "server.asgi:application"]

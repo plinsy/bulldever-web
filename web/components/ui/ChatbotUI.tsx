@@ -4,10 +4,14 @@ import { useState, useRef, useEffect } from "react";
 import { Send, X, Bot, User } from "lucide-react";
 import axios from "axios";
 import { motion, AnimatePresence } from "framer-motion";
+import { LatLng } from "../world/geo";
+
+import ReactMarkdown from 'react-markdown';
+import remarkGfm from 'remark-gfm';
 
 const API_BASE = "http://127.0.0.1:8000/api";
 
-export default function ChatbotUI({ isOpen, onClose }: { isOpen: boolean, onClose: () => void }) {
+export default function ChatbotUI({ isOpen, onClose, center }: { isOpen: boolean, onClose: () => void, center: LatLng }) {
     const [messages, setMessages] = useState<{role: string, text: string}[]>([
         { role: 'bot', text: 'Salama! Je suis votre assistant trafic. Comment puis-je vous aider aujourd\'hui?' }
     ]);
@@ -29,7 +33,10 @@ export default function ChatbotUI({ isOpen, onClose }: { isOpen: boolean, onClos
         setLoading(true);
 
         try {
-            const res = await axios.post(`${API_BASE}/chatbot/`, { query: userMsg });
+            const res = await axios.post(`${API_BASE}/chatbot/`, { 
+                query: userMsg,
+                user_location: center
+            });
             setMessages(prev => [...prev, { role: 'bot', text: res.data.response }]);
 
             // Handle actions from the chatbot
@@ -59,14 +66,14 @@ export default function ChatbotUI({ isOpen, onClose }: { isOpen: boolean, onClos
                     <div className="p-4 border-b border-white/10 flex justify-between items-center bg-base-200">
                         <div className="flex items-center gap-3">
                             <div className="avatar placeholder">
-                                <div className="bg-primary/20 text-primary rounded-xl w-10">
-                                    <Bot size={20} />
+                                <div className="bg-primary/20 text-primary rounded-xl w-10 h-10 flex items-center justify-center">
+                                    <Bot size={22} />
                                 </div>
                             </div>
                             <div>
-                                <h2 className="text-white font-bold text-sm">Assistant Tana</h2>
-                                <div className="flex items-center gap-1.5">
-                                    <div className="badge badge-success badge-xs animate-pulse" />
+                                <h2 className="text-white font-bold text-sm leading-tight">Assistant Tana</h2>
+                                <div className="flex items-center gap-1.5 leading-none mt-0.5">
+                                    <div className="w-1.5 h-1.5 rounded-full bg-success animate-pulse" />
                                     <span className="text-[10px] text-slate-500 font-bold uppercase tracking-widest">En ligne</span>
                                 </div>
                             </div>
@@ -85,10 +92,12 @@ export default function ChatbotUI({ isOpen, onClose }: { isOpen: boolean, onClos
                                         {m.role === 'user' ? <User size={16} /> : <Bot size={16} className="text-primary" />}
                                     </div>
                                 </div>
-                                <div className={`chat-bubble text-sm ${
-                                    m.role === 'user' ? 'chat-bubble-primary' : 'bg-base-100 text-slate-200'
+                                <div className={`chat-bubble text-sm prose prose-sm max-w-full prose-p:my-0 prose-headings:mb-2 prose-headings:mt-4 prose-ul:my-2 prose-li:my-0 ${
+                                    m.role === 'user' ? 'chat-bubble-primary prose-invert' : 'bg-base-100 text-slate-200 prose-invert'
                                 }`}>
-                                    {m.text}
+                                    <ReactMarkdown remarkPlugins={[remarkGfm]}>
+                                        {m.text}
+                                    </ReactMarkdown>
                                 </div>
                             </div>
                         ))}

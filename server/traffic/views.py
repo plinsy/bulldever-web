@@ -135,34 +135,148 @@ def predict_zone_congestion(zone_id: str):
 
 def find_route(start_lat: float, start_lng: float, end_lat: float, end_lng: float):
     """
-    Calcule le meilleur itinéraire entre deux points GPS et l'affiche sur la carte.
+    Calcule le meilleur itinéraire entre deux points GPS et l'affiche sur la carte en vert.
+    Utilise les vraies données routières OpenStreetMap (Overpass API) — pas de liste codée en dur.
+    Les coordonnées doivent être en degrés décimaux (ex: lat=-18.91, lng=47.53).
     """
+    import heapq, math, urllib.request, urllib.parse, json as _json
+
+    def haversine(lat1, lng1, lat2, lng2):
+        R = 6371000
+        r1, r2 = math.radians(lat1), math.radians(lat2)
+        dlat, dlng = math.radians(lat2 - lat1), math.radians(lng2 - lng1)
+        a = math.sin(dlat/2)**2 + math.cos(r1)*math.cos(r2)*math.sin(dlng/2)**2
+        return R * 2 * math.asin(math.sqrt(a))
+
     try:
-        graph = build_graph()
-        if not graph: return {"error": "Graphe non disponible"}
-        
-        graph_nodes = list(graph.keys())
-        start_node = nearest_node(start_lat, start_lng, graph_nodes)
-        end_node = nearest_node(end_lat, end_lng, graph_nodes)
-        
-        path_nodes = dijkstra(graph, start_node, end_node)
-        if not path_nodes: return {"error": "Aucun chemin trouvé"}
-        
+        # ── 1. Build bounding box covering start → end with a margin ──────
+        margin = 0.015  # ~1.5 km padding around the route
+        min_lat = min(start_lat, end_lat) - margin
+        max_lat = max(start_lat, end_lat) + margin
+        min_lng = min(start_lng, end_lng) - margin
+        max_lng = max(start_lng, end_lng) + margin
+        bbox = f"{min_lat},{min_lng},{max_lat},{max_lng}"
+
+        # ── 2. Fetch real road network from Overpass API ───────────────────
+        query = f"""
+        [out:json][timeout:20];
+        (
+          way["highway"~"^(motorway|trunk|primary|secondary|tertiary|residential|unclassified|service)$"]
+            ({bbox});
+        );
+        out body;
+        >;
+        out skel qt;
+        """
+        data = urllib.parse.urlencode({"data": query}).encode()
+        req = urllib.request.Request(
+            "https://overpass-api.de/api/interpreter",
+            data=data,
+            headers={"User-Agent": "AlaminoAI/1.0"}
+        )
+        with urllib.request.urlopen(req, timeout=25) as resp:
+            osm = _json.loads(resp.read())
+
+        # ── 3. Parse nodes and ways ────────────────────────────────────────
+        nodes = {}   # id → (lat, lng)
+        ways = []    # list of [node_id, ...]
+        for el in osm.get("elements", []):
+            if el["type"] == "node":
+                nodes[el["id"]] = (el["lat"], el["lon"])
+            elif el["type"] == "way" and "nodes" in el:
+                ways.append(el["nodes"])
+
+        if not nodes or not ways:
+            return {"error": "Aucune route trouvée dans cette zone"}
+
+        # ── 4. Build adjacency graph ───────────────────────────────────────
+        graph = {}
+        for way in ways:
+            for i in range(len(way) - 1):
+                a, b = way[i], way[i + 1]
+                if a not in nodes or b not in nodes:
+                    continue
+                la, loa = nodes[a]
+                lb, lob = nodes[b]
+                d = haversine(la, loa, lb, lob)
+                graph.setdefault(a, []).append((b, d))
+                graph.setdefault(b, []).append((a, d))
+
+        # ── 5. Find nearest graph node to start and end ───────────────────
+        def nearest(lat, lng):
+            best, best_d = None, float('inf')
+            for nid, (nlat, nlng) in nodes.items():
+                if nid not in graph:
+                    continue
+                d = haversine(lat, lng, nlat, nlng)
+                if d < best_d:
+                    best, best_d = nid, d
+            return best
+
+        start_node = nearest(start_lat, start_lng)
+        end_node   = nearest(end_lat,   end_lng)
+
+        if start_node is None or end_node is None:
+            return {"error": "Impossible de localiser les points sur le réseau routier"}
+
+        # ── 6. Dijkstra ───────────────────────────────────────────────────
+        dist = {start_node: 0.0}
+        prev = {}
+        heap = [(0.0, start_node)]
+        visited = set()
+
+        while heap:
+            d, u = heapq.heappop(heap)
+            if u in visited:
+                continue
+            visited.add(u)
+            if u == end_node:
+                break
+            for v, w in graph.get(u, []):
+                nd = d + w
+                if nd < dist.get(v, float('inf')):
+                    dist[v] = nd
+                    prev[v] = u
+                    heapq.heappush(heap, (nd, v))
+
+        # ── 7. Reconstruct path ───────────────────────────────────────────
+        if end_node not in dist or dist[end_node] == float('inf'):
+            return {"error": "Aucun chemin trouvé entre ces deux points"}
+
+        path_ids, cur = [], end_node
+        while cur is not None:
+            path_ids.append(cur)
+            cur = prev.get(cur)
+        path_ids.reverse()
+
+        # Simplify: keep 1 point every ~50m to reduce payload size
         path_coords = []
-        for node_id in path_nodes:
-            lat, lng = _parse_node_id(node_id)
-            path_coords.append({"lat": lat, "lng": lng})
-            
-        # Register action for the frontend
-        if not hasattr(request_context, 'actions'): request_context.actions = []
+        last_lat, last_lng = None, None
+        for nid in path_ids:
+            lat, lng = nodes[nid]
+            if last_lat is None or haversine(last_lat, last_lng, lat, lng) > 30:
+                path_coords.append({"lat": lat, "lng": lng})
+                last_lat, last_lng = lat, lng
+
+        # ── 8. Send actions to the frontend ──────────────────────────────
+        if not hasattr(request_context, 'actions'):
+            request_context.actions = []
+        request_context.actions.append({"type": "SET_PATH", "payload": path_coords})
         request_context.actions.append({
-            "type": "SET_PATH",
-            "payload": path_coords
+            "type": "MOVE_CAMERA",
+            "payload": {"lat": start_lat, "lng": start_lng, "zoom": 15}
         })
-        
-        return {"status": "Route trouvée", "points": len(path_coords)}
+
+        total_dist = round(dist[end_node] / 1000, 1)
+        return {
+            "status": "Route tracée sur la carte",
+            "points": len(path_coords),
+            "distance_km": total_dist,
+        }
+
     except Exception as e:
-        return {"error": str(e)}
+        return {"error": f"Erreur de routage: {str(e)}"}
+
 
 def move_camera(lat: float, lng: float, zoom: float = 18):
     """
@@ -180,6 +294,7 @@ def move_camera(lat: float, lng: float, zoom: float = 18):
 class ChatbotView(APIView):
     def post(self, request):
         user_query = request.data.get('query')
+        user_loc = request.data.get('user_location') # Expects {lat, lng}
         
         # Initialize context for this request
         request_context.actions = []
@@ -193,13 +308,18 @@ class ChatbotView(APIView):
             client = genai.Client(api_key=GEMINI_API_KEY)
             model_id = "gemma-4-26b-a4b-it" 
 
-            system_instruction = """
+            loc_str = ""
+            if user_loc:
+                loc_str = f"\nPOSITION ACTUELLE DE L'UTILISATEUR : lat {user_loc.get('lat')}, lng {user_loc.get('lng')}"
+
+            system_instruction = f"""
             Vous êtes AlaminoAI, l'assistant expert et contrôleur de la carte d'Antananarivo.
+            {loc_str}
             
             VOS CAPACITÉS :
             - Consulter les stats via 'get_traffic_stats'.
             - Prédire l'évolution via 'predict_zone_congestion'.
-            - Calculer et AFFICHER un itinéraire via 'find_route'. Vous devez demander les coordonnées ou utiliser des points connus.
+            - Calculer et AFFICHER un itinéraire via 'find_route'. Utilisez la POSITION ACTUELLE DE L'UTILISATEUR comme point de départ si on vous demande un trajet depuis 'ma position'.
             - Déplacer la caméra via 'move_camera'.
             
             POINTS CONNUS (lat, lng) :
@@ -212,24 +332,24 @@ class ChatbotView(APIView):
             RÈGLES :
             - Si l'utilisateur veut aller d'un point à un autre, utilisez 'find_route'.
             - Si l'utilisateur veut voir un endroit, utilisez 'move_camera'.
-            - Répondez en Français ou Malgache.
+            - Répondez en par la langue que le utilisateur utilise.
             """
 
-            # Automatic Function Calling configuration
-            generate_content_config = types.GenerateContentConfig(
-                system_instruction=system_instruction,
-                tools=[get_traffic_stats, predict_zone_congestion, find_route, move_camera]
+            # Use Chat API with Automatic Function Calling
+            chat = client.chats.create(
+                model=model_id,
+                config=types.GenerateContentConfig(
+                    system_instruction=system_instruction,
+                    tools=[get_traffic_stats, predict_zone_congestion, find_route, move_camera],
+                    automatic_function_calling=types.AutomaticFunctionCallingConfig(disable=False)
+                )
             )
             
-            response = client.models.generate_content(
-                model=model_id,
-                contents=user_query,
-                config=generate_content_config
-            )
+            response = chat.send_message(user_query)
             
             return Response({
                 'response': response.text,
-                'actions': request_context.actions
+                'actions': getattr(request_context, 'actions', [])
             })
 
         except Exception as e:

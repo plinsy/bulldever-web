@@ -10,6 +10,7 @@ import LandingPage from "@/components/ui/LandingPage";
 import { AnimatePresence, motion } from "framer-motion";
 import type { TrafficMetrics } from "@/components/simulation/CarSystem";
 import type { AccidentEvent } from "@/components/simulation/accidentTypes";
+import { INITIAL_CENTER, LatLng } from "@/components/world/geo";
 
 export default function Home() {
     const [showSimulation, setShowSimulation] = useState(false);
@@ -19,6 +20,7 @@ export default function Home() {
     const [isLoading, setIsLoading] = useState(true);
     const [metrics, setMetrics] = useState<TrafficMetrics | null>(null);
     const [accidents, setAccidents] = useState<AccidentEvent[]>([]);
+    const [userLocation, setUserLocation] = useState<LatLng>(INITIAL_CENTER);
 
     const handleLoadingChange = useCallback((loading: boolean) => {
         setIsLoading(loading);
@@ -67,6 +69,7 @@ export default function Home() {
                             onMetrics={setMetrics}
                             onAccident={handleAccident}
                             accidents={accidents}
+                            onUserLocation={setUserLocation}
                         />
 
                         {/* Road info popup */}
@@ -107,6 +110,7 @@ export default function Home() {
                         <ChatbotUI
                             isOpen={isChatOpen}
                             onClose={() => setIsChatOpen(false)}
+                            center={userLocation}
                         />
 
                         <AccidentPanel accidents={accidents} onDismiss={handleDismiss} />
