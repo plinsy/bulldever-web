@@ -22,3 +22,4 @@
 - [ ] Personnaliser le Design Systeme de l'app
 - [X] Ajouter une page d'accueil pour presenter l'app
 - [X] Faire en sorte d'afficher uniquement 1 accident corporel et 1 accident materiel sur la map
+- [X] L'usager devrait selectionner sa position sur une map pour savoir son meilleur chemin et son heure de sortie ideale
